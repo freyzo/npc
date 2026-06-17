@@ -3,11 +3,10 @@ let ws = null;
 let connectedTabs = new Map();
 let nextSessionId = 1;
 
-// Create offscreen document to keep service worker alive
 let offscreenCreating = null;
 async function setupOffscreen() {
   if (offscreenCreating) return offscreenCreating;
-  
+
   offscreenCreating = (async () => {
     try {
       const hasDoc = await chrome.offscreen.hasDocument();
@@ -24,20 +23,17 @@ async function setupOffscreen() {
       offscreenCreating = null;
     }
   })();
-  
+
   return offscreenCreating;
 }
 
-// Handle keepalive messages from offscreen document
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'keepalive') {
-    // Just receiving this keeps the worker alive
     sendResponse({ ok: true });
   }
-  return true; // Keep channel open for async response
+  return true;
 });
 
-// Setup offscreen on install/startup
 chrome.runtime.onInstalled.addListener(setupOffscreen);
 chrome.runtime.onStartup.addListener(setupOffscreen);
 
@@ -47,20 +43,18 @@ function isAttachable(url) {
 
 function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-  
+
   try {
     ws = new WebSocket(RELAY_URL);
   } catch (e) {
     updateIcon();
     return;
   }
-  
+
   ws.onopen = async () => {
     console.log('[npc] WebSocket connected to relay');
     updateIcon();
-    // Wait a bit for everything to settle
     await new Promise(r => setTimeout(r, 500));
-    // AUTO-ATTACH: When relay connects, attach to active tab automatically
     await autoAttachActiveTab();
   };
   ws.onerror = () => {};
@@ -70,37 +64,33 @@ function connect() {
     updateIcon();
     setTimeout(connect, 3000);
   };
-  
+
   ws.onmessage = async (e) => {
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
-    
+
     if (msg.method === 'ping') {
       ws.send(JSON.stringify({ method: 'pong' }));
       return;
     }
-    
-    // Command from relay to attach active tab
+
     if (msg.method === 'attachActiveTab') {
       await autoAttachActiveTab();
       ws.send(JSON.stringify({ id: msg.id, result: { attached: connectedTabs.size } }));
       return;
     }
-    
-    // CORS-bypassing fetch from extension context
+
     if (msg.method === 'corsFetch') {
       const response = { id: msg.id };
       try {
         const { url, options = {} } = msg.params || {};
-        
-        // MV3 FIX: credentials:'include' does NOT work for cross-origin requests in service workers
-        // We must manually include cookies using chrome.cookies.getAll()
+
         const cookies = await chrome.cookies.getAll({ url: url });
         const cookieString = cookies
           .filter(c => !c.expirationDate || c.expirationDate > Date.now() / 1000)
           .map(c => `${c.name}=${c.value}`)
           .join('; ');
-        
+
         const fetchOpts = {
           method: options.method || 'GET',
           headers: {
@@ -109,7 +99,7 @@ function connect() {
           }
         };
         if (options.body) fetchOpts.body = options.body;
-        
+
         const resp = await fetch(url, fetchOpts);
         const text = await resp.text();
         let data;
@@ -123,7 +113,7 @@ function connect() {
       }
       return;
     }
-    
+
     if (msg.method === 'forwardCDPCommand') {
       const response = { id: msg.id };
       try {
@@ -139,7 +129,6 @@ function connect() {
 }
 
 async function handleCDP({ method, params, sessionId }) {
-  // Browser-level commands that don't need a tab/session
   const browserLevelCommands = [
     'Target.createTarget',
     'Target.closeTarget',
@@ -147,47 +136,38 @@ async function handleCDP({ method, params, sessionId }) {
     'Target.getTargets',
     'Target.attachToTarget'
   ];
-  
-  // For browser-level commands, handle without requiring a session
+
   if (browserLevelCommands.includes(method)) {
     if (method === 'Target.attachToTarget') {
-      // Find the tab by targetId and return its sessionId
       const targetId = params?.targetId;
       for (const [tid, info] of connectedTabs) {
         if (info.targetId === targetId) {
           return { sessionId: info.sessionId };
         }
       }
-      // If not found, try to attach to it
-      // This handles the case where the target was created but not yet tracked
       throw new Error('Target not found: ' + targetId);
     }
-    
+
     if (method === 'Target.createTarget') {
-      // Create new tab (optionally in new window)
       let tab;
       if (params?.newWindow) {
-        // Create in new window - these tabs CAN be closed
         const win = await chrome.windows.create({ url: params?.url || 'about:blank', focused: false });
         tab = win.tabs[0];
       } else {
         tab = await chrome.tabs.create({ url: params?.url || 'about:blank', active: false });
       }
       await new Promise(r => setTimeout(r, 500));
-      
-      // Try to detach any existing debugger first
+
       try {
         await chrome.debugger.detach({ tabId: tab.id });
       } catch (e) {
-        // Ignore - no debugger attached
       }
-      
+
       const { targetInfo } = await attachTab(tab.id);
       return { targetId: targetInfo.targetId };
     }
-    
+
     if (method === 'Target.closeTarget') {
-      // Find tab by targetId and close it
       const targetId = params?.targetId;
       let foundTabId = null;
       let foundWindowId = null;
@@ -196,27 +176,21 @@ async function handleCDP({ method, params, sessionId }) {
       }
       if (foundTabId) {
         try {
-          // Get the window ID and tab count before closing
           const tab = await chrome.tabs.get(foundTabId);
           foundWindowId = tab.windowId;
-          
-          // Get window info to check tab count
+
           const win = await chrome.windows.get(foundWindowId, { populate: true });
           const isLastTab = win.tabs.length <= 1;
-          
-          // Detach debugger first
+
           await chrome.debugger.detach({ tabId: foundTabId }).catch(() => {});
           connectedTabs.delete(foundTabId);
-          
+
           if (isLastTab) {
-            // Close entire window if this is the last tab
             await chrome.windows.remove(foundWindowId);
           } else {
-            // Just close the tab
             await chrome.tabs.remove(foundTabId);
           }
-          
-          // Notify relay
+
           if (ws?.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({
               method: 'forwardCDPEvent',
@@ -233,9 +207,8 @@ async function handleCDP({ method, params, sessionId }) {
       }
       throw new Error('Target not found: ' + targetId);
     }
-    
+
     if (method === 'Target.activateTarget') {
-      // Bring tab to foreground
       const targetId = params?.targetId;
       let foundTabId = null;
       for (const [tid, info] of connectedTabs) {
@@ -251,7 +224,7 @@ async function handleCDP({ method, params, sessionId }) {
       }
       throw new Error('Target not found: ' + targetId);
     }
-    
+
     if (method === 'Target.getTargets') {
       return {
         targetInfos: Array.from(connectedTabs.values()).map(info => ({
@@ -262,13 +235,12 @@ async function handleCDP({ method, params, sessionId }) {
       };
     }
   }
-  
-  // Session-scoped commands need a valid tab
+
   let tabId = null;
   for (const [tid, info] of connectedTabs) {
     if (info.sessionId === sessionId) { tabId = tid; break; }
   }
-  
+
   if (!tabId) throw new Error('Session not found');
   return await chrome.debugger.sendCommand({ tabId }, method, params);
 }
@@ -282,11 +254,11 @@ async function attachTab(tabId) {
     console.log('[npc] Attach failed:', e.message);
     throw new Error('Could not attach to tab: ' + e.message);
   }
-  
+
   try {
     await chrome.debugger.sendCommand({ tabId }, 'Page.enable');
   } catch {}
-  
+
   let targetInfo;
   try {
     const result = await chrome.debugger.sendCommand({ tabId }, 'Target.getTargetInfo');
@@ -294,10 +266,10 @@ async function attachTab(tabId) {
   } catch {
     targetInfo = { targetId: `tab-${tabId}`, url: '', type: 'page' };
   }
-  
+
   const sessionId = `session-${nextSessionId++}`;
   connectedTabs.set(tabId, { sessionId, targetId: targetInfo.targetId });
-  
+
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
       method: 'forwardCDPEvent',
@@ -307,7 +279,7 @@ async function attachTab(tabId) {
       }
     }));
   }
-  
+
   updateIcon();
   return { targetInfo, sessionId };
 }
@@ -315,7 +287,7 @@ async function attachTab(tabId) {
 function detachTab(tabId) {
   const info = connectedTabs.get(tabId);
   if (!info) return;
-  
+
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
       method: 'forwardCDPEvent',
@@ -325,7 +297,7 @@ function detachTab(tabId) {
       }
     }));
   }
-  
+
   connectedTabs.delete(tabId);
   chrome.debugger.detach({ tabId }).catch(() => {});
   updateIcon();
@@ -348,7 +320,6 @@ chrome.debugger.onEvent.addListener((src, method, params) => {
 chrome.debugger.onDetach.addListener((src) => {
   if (connectedTabs.has(src.tabId)) {
     detachTab(src.tabId);
-    // Auto-reattach to another tab if we lost our only connection
     ensureConnected();
   }
 });
@@ -356,16 +327,14 @@ chrome.debugger.onDetach.addListener((src) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (connectedTabs.has(tabId)) {
     detachTab(tabId);
-    // Auto-reattach to another tab if we lost our only connection
     ensureConnected();
   }
 });
 
-// Ensure at least one tab is always connected
 async function ensureConnected() {
   if (ws?.readyState !== WebSocket.OPEN) return;
-  if (connectedTabs.size > 0) return; // Already have a connection
-  
+  if (connectedTabs.size > 0) return;
+
   console.log('[npc] No tabs connected, auto-attaching...');
   await autoAttachActiveTab();
 }
@@ -376,7 +345,7 @@ chrome.action.onClicked.addListener(async (tab) => {
     console.log('[npc] Skipping non-attachable page');
     return;
   }
-  
+
   if (connectedTabs.has(tab.id)) {
     console.log('[npc] Tab already connected, detaching');
     detachTab(tab.id);
@@ -393,30 +362,24 @@ chrome.action.onClicked.addListener(async (tab) => {
 });
 
 connect();
-// setupOffscreen called via onInstalled/onStartup listeners
 
-// More aggressive reconnect - check every 3 seconds
 setInterval(() => {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     connect();
   } else if (connectedTabs.size === 0) {
-    // WebSocket is connected but no tabs - auto-attach
     autoAttachActiveTab();
   }
 }, 3000);
 
-// Keep service worker alive - Chrome suspends inactive workers
 chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'keepalive') {
-    // Just accessing ws keeps the worker alive
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ method: 'ping' }));
     }
   }
 });
 
-// Auto-attach to active tab when relay connects
 let autoAttaching = false;
 async function autoAttachActiveTab() {
   if (autoAttaching) return;
@@ -446,7 +409,6 @@ async function autoAttachActiveTab() {
   }
 }
 
-// Also auto-attach when switching tabs (optional aggressive mode)
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   if (ws?.readyState !== WebSocket.OPEN) return;
   try {
@@ -460,14 +422,12 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
   } catch {}
 });
 
-// Auto-attach when new tabs are created (if we have no connections)
 chrome.tabs.onCreated.addListener(async (tab) => {
   if (ws?.readyState !== WebSocket.OPEN) return;
-  if (connectedTabs.size > 0) return; // Already have connections
-  
-  // Wait for tab to load
+  if (connectedTabs.size > 0) return;
+
   await new Promise(r => setTimeout(r, 1000));
-  
+
   try {
     const updatedTab = await chrome.tabs.get(tab.id);
     if (updatedTab && isAttachable(updatedTab.url)) {
@@ -477,12 +437,11 @@ chrome.tabs.onCreated.addListener(async (tab) => {
   } catch {}
 });
 
-// When a tab finishes loading, check if we need to attach
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'complete') return;
   if (ws?.readyState !== WebSocket.OPEN) return;
-  if (connectedTabs.size > 0) return; // Already have connections
-  
+  if (connectedTabs.size > 0) return;
+
   if (tab && isAttachable(tab.url)) {
     try {
       await attachTab(tabId);

@@ -1,0 +1,209 @@
+{
+  "_meta": {
+    "file": "Chrome Extension Config.json",
+    "purpose": "Chrome Web Store submission config for NPC extension.",
+    "version": "1.0.0",
+    "based_on": "Spoonfeeder + Clodcapture CWS submissions"
+  },
+
+  "extension": {
+    "name": "NPC",
+    "version": "0.1.0",
+    "manifest_version": 3,
+    "description_short": "Connect your browser to NPC - handles the side quests.",
+    "permissions": ["debugger", "tabs", "activeTab", "offscreen", "alarms", "cookies"],
+    "host_permissions": ["<all_urls>"],
+    "icons": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+
+  "cws_developer_account": {
+    "google_account": "suzyzou34@gmail.com",
+    "publisher_display_name": "Freya Zou",
+    "contact_email": "suzyzou34@gmail.com",
+    "address": "",
+    "trader_status": "Non-trader",
+    "developer_console_url": "https://chrome.google.com/webstore/devconsole"
+  },
+
+  "cws_package": {
+    "extension_id": "",
+    "store_url": "",
+    "current_published_version": "",
+    "draft_version": "0.1.0",
+    "item_type": "Extension",
+    "verified_crx_uploads": false
+  },
+
+  "cws_store_listing": {
+    "product_details": {
+      "title": "NPC",
+      "summary": "Browser automation bridge for MCP-compatible IDEs. Control tabs, click, type, and read pages from your code editor.",
+      "description": "NPC connects your browser to any MCP-compatible IDE (Cursor, VS Code, Windsurf) so you can automate browser actions without leaving your editor. It uses the Chrome DevTools Protocol to control tabs from your coding environment via a local WebSocket relay.\n\nFeatures:\n- Screenshot any tab and get the image back in your IDE\n- Click, type, scroll, and press keys on any page\n- Find elements by CSS selector or text content\n- Extract text and HTML from pages\n- Navigate to URLs, go back/forward\n- Run JavaScript in the page context\n- Batch multiple actions into a single command for speed\n- Auto-attaches to your active tab so it just works\n\nBuilt for developers who want to interact with web apps (Slack, Discord, Gmail, dashboards) from their IDE without context switching. NPC acts as a lightweight browser control layer - your IDE sends commands, NPC executes them.\n\nRequires the NPC CLI server (npm i -g npc-agent) running locally. The extension connects to the CLI via WebSocket on localhost:7221.",
+      "category": "Developer Tools",
+      "language": "English (United States)"
+    },
+    "graphic_assets": {
+      "store_icon": {
+        "required": true,
+        "size": "128x128 px",
+        "format": "PNG",
+        "path": "extension/icons/icon128.png"
+      },
+      "global_promo_video": {
+        "required": false,
+        "format": "YouTube URL",
+        "url": ""
+      },
+      "screenshots": {
+        "required": true,
+        "min_count": 2,
+        "max_count": 5,
+        "sizes": ["1280x800 px", "640x400 px"],
+        "format": "JPEG or 24-bit PNG (no alpha)",
+        "paths": []
+      },
+      "small_promo_tile": {
+        "required": false,
+        "recommended": true,
+        "size": "440x280 px",
+        "format": "JPEG or 24-bit PNG (no alpha)",
+        "path": ""
+      },
+      "marquee_promo_tile": {
+        "required": false,
+        "size": "1400x560 px",
+        "format": "JPEG or 24-bit PNG (no alpha)",
+        "path": ""
+      }
+    },
+    "additional_fields": {
+      "official_url": "https://github.com/freyzo/npc",
+      "homepage_url": "https://github.com/freyzo/npc",
+      "support_url": "https://github.com/freyzo/npc/issues",
+      "mature_content": false
+    },
+    "item_support": {
+      "visibility": "Public"
+    }
+  },
+
+  "cws_privacy": {
+    "single_purpose": "Connect your browser to an MCP-compatible IDE for browser automation via the Chrome DevTools Protocol.",
+    "permission_justifications": {
+      "debugger": "Required to send Chrome DevTools Protocol commands (click, type, screenshot, navigate, evaluate JavaScript) to browser tabs on behalf of the user's IDE.",
+      "tabs": "Required to query which tabs are open, detect tab switches, and auto-attach the debugger to the active tab when the relay connects.",
+      "activeTab": "Required to identify and interact with the currently focused tab when the user clicks the extension icon.",
+      "offscreen": "Required to maintain an offscreen document that sends periodic keepalive messages, preventing Chrome from suspending the service worker during active automation sessions.",
+      "alarms": "Required to schedule periodic keepalive pings to the WebSocket relay, ensuring the connection stays alive while the service worker is active.",
+      "cookies": "Required to read cookies for the target URL when performing fetch requests through the extension context, enabling authenticated API calls on behalf of the user's IDE.",
+      "host_permissions": "Required to attach the Chrome DevTools Protocol debugger to any tab the user wants to automate. Without broad host access, the extension cannot control pages on arbitrary domains."
+    },
+    "uses_remote_code": false,
+    "remote_code_justification": "",
+    "data_collection": {
+      "personally_identifiable_information": false,
+      "health_information": false,
+      "financial_and_payment_information": false,
+      "authentication_information": false,
+      "personal_communications": false,
+      "location": false,
+      "web_history": false,
+      "user_activity": false,
+      "website_content": false
+    },
+    "privacy_certifications": {
+      "not_sold_to_third_parties": true,
+      "not_used_for_unrelated_purposes": true,
+      "not_used_for_creditworthiness": true
+    },
+    "privacy_policy_url": "https://github.com/freyzo/npc#privacy"
+  },
+
+  "cws_distribution": {
+    "payment_model": "Free of charge",
+    "visibility": "Public",
+    "private_group": "",
+    "regions": "All regions"
+  },
+
+  "cws_test_instructions": {
+    "credentials": {
+      "username": "",
+      "password": ""
+    },
+    "additional_instructions": "1. Install the NPC CLI: npm i -g npc-agent\n2. Start the server: npc (or node dist/index.js)\n3. Load the extension in chrome://extensions (Developer mode > Load unpacked)\n4. Open any web page (e.g. https://example.com)\n5. The extension auto-attaches to the active tab (green badge with '1')\n6. From an MCP-compatible IDE (Cursor, VS Code), configure npc as an MCP server\n7. Use npc_screenshot, npc_click, npc_type tools from the IDE\n8. Verify the extension badge stays green and commands execute on the page"
+  },
+
+  "submission_checklist": {
+    "package": [
+      "[x] No emojis in JS/HTML files",
+      "[x] No // or /* */ comments in JS files",
+      "[x] No debug/dev-only flags (DEBUG_MODE = false)",
+      "[x] No dead files in zip (remove assets not referenced by manifest)",
+      "[x] Version in manifest matches intended draft version",
+      "[x] All icon files present: icons/icon16.png, icons/icon48.png, icons/icon128.png",
+      "[x] Zip built from clean copy - not dev folder with node_modules etc."
+    ],
+    "store_listing": [
+      "[x] Title set",
+      "[x] Summary 132 chars or fewer, specific (not generic)",
+      "[x] Description 200+ chars, explains features + audience",
+      "[x] Category selected",
+      "[x] Store icon 128x128 uploaded",
+      "[ ] Minimum 2 screenshots uploaded",
+      "[x] Homepage URL set",
+      "[x] Support URL set"
+    ],
+    "privacy": [
+      "[x] Single purpose filled",
+      "[x] Justification filled for every permission requested",
+      "[x] Remote code: No",
+      "[x] All data collection boxes accurate",
+      "[x] All three certifications checked",
+      "[x] Privacy policy URL filled"
+    ],
+    "distribution": [
+      "[x] Payment model selected",
+      "[x] Visibility selected",
+      "[x] Region distribution confirmed"
+    ]
+  },
+
+  "language_guidelines": {
+    "avoid": {
+      "inject": "use: load, initialize, insert",
+      "injection": "use: loading, initialization",
+      "monitor": "use: manage, track",
+      "daemon": "use: background service",
+      "scrape": "use: read, capture",
+      "spy": "omit entirely",
+      "hack": "omit entirely",
+      "corporate jargon": "omit internal system names visible to public reviewers"
+    }
+  },
+
+  "rejection_history": [],
+
+  "build_workflow": {
+    "source_folder": "extension/",
+    "build_folder": "extension-cws/ (gitignored, delete after submission)",
+    "zip_command": "cd extension-cws && zip -r ../npc-extension-v0.1.0.zip manifest.json background.js offscreen.js offscreen.html icons/",
+    "steps": [
+      "1. Copy extension files to extension-cws/",
+      "2. Strip all comments from JS files",
+      "3. Strip all emojis from JS/HTML files",
+      "4. Verify version in manifest.json matches intended version",
+      "5. Remove any files not referenced in manifest",
+      "6. Run pre-submission checklist",
+      "7. Zip from inside build folder",
+      "8. Upload to CWS devconsole",
+      "9. Fill Store Listing, Privacy, Distribution tabs",
+      "10. Submit for review",
+      "11. Delete build folder"
+    ]
+  }
+}

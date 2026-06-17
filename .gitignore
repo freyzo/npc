@@ -2,6 +2,8 @@ node_modules/
 dist/
 .env
 .env.*
-screenshot.png
-fb-*.png
 .DS_Store
+*.tgz
+extension-cws/
+cws-assets/
+npc-extension-*.zip
