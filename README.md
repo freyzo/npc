@@ -96,7 +96,7 @@ In your IDE chat, just ask. The agent calls NPC tools automatically.
 ## How it works
 
 <p align="center">
-  <img src="doc/npc.svg" alt="NPC system design - IDE to browser pipeline" />
+  <img src="docs/npc.svg" alt="NPC system design - IDE to browser pipeline" />
 </p>
 
 ```

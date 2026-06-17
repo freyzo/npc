@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NPC - Your browser's NPC. Handles the side quests.</title>
+  <meta name="description" content="Control your browser from any MCP IDE. Click, type, scroll, screenshot - without leaving your editor." />
+  <meta property="og:title" content="NPC - Browser automation for your IDE" />
+  <meta property="og:description" content="One CLI + one Chrome extension. Your IDE says what to do, NPC does it in your real browser." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://freyzo.github.io/npc/" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #0a0f1a;
+      --bg2: #111827;
+      --card: #1e293b;
+      --border: #334155;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #22c55e;
+      --cyan: #06b6d4;
+      --mono: 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Cascadia Code', monospace;
+      --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--cyan); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+    /* Hero */
+    .hero {
+      text-align: center;
+      padding: 80px 0 60px;
+    }
+
+    .hero-logo {
+      width: 120px;
+      height: 120px;
+      margin-bottom: 24px;
+      filter: drop-shadow(0 0 24px rgba(34, 197, 94, 0.3));
+    }
+
+    .hero h1 {
+      font-size: 4rem;
+      font-weight: 800;
+      letter-spacing: -2px;
+      background: linear-gradient(135deg, var(--cyan), var(--accent));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero .tagline {
+      font-size: 1.25rem;
+      color: var(--muted);
+      margin-top: 8px;
+    }
+
+    .hero .sub {
+      font-size: 1rem;
+      color: var(--muted);
+      margin-top: 4px;
+      opacity: 0.7;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      margin-top: 32px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      transition: all 0.2s;
+      border: 1px solid transparent;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #000;
+    }
+    .btn-primary:hover { background: #16a34a; text-decoration: none; }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--text);
+      border-color: var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--cyan); text-decoration: none; }
+
+    .install-cmd {
+      display: inline-block;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 24px;
+      font-family: var(--mono);
+      font-size: 1rem;
+      color: var(--accent);
+      margin-top: 24px;
+      cursor: pointer;
+      position: relative;
+      transition: border-color 0.2s;
+    }
+    .install-cmd:hover { border-color: var(--accent); }
+    .install-cmd .copy-hint {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-left: 12px;
+      font-family: var(--sans);
+    }
+
+    /* Sections */
+    section { padding: 60px 0; }
+
+    .section-label {
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }
+
+    h2 {
+      font-size: 2rem;
+      font-weight: 700;
+      margin-bottom: 16px;
+      letter-spacing: -0.5px;
+    }
+
+    .section-desc {
+      color: var(--muted);
+      max-width: 600px;
+      margin-bottom: 40px;
+      font-size: 1.05rem;
+    }
+
+    /* Problem/Solution */
+    .problem-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+
+    .problem-card, .solution-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px;
+    }
+
+    .problem-card h3 {
+      color: #f87171;
+      font-size: 0.85rem;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+
+    .solution-card h3 {
+      color: var(--accent);
+      font-size: 0.85rem;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+
+    .problem-card p, .solution-card p {
+      color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.7;
+    }
+
+    /* Architecture */
+    .arch-flow {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr auto 1fr;
+      gap: 0;
+      align-items: center;
+      margin-top: 40px;
+    }
+
+    .arch-box {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      text-align: center;
+    }
+
+    .arch-box h4 {
+      font-size: 1rem;
+      color: var(--cyan);
+      margin-bottom: 8px;
+    }
+
+    .arch-box .tech {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--accent);
+      margin-top: 8px;
+    }
+
+    .arch-box p {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .arch-arrow {
+      text-align: center;
+      color: var(--accent);
+      font-size: 1.4rem;
+      padding: 0 8px;
+    }
+
+    .arch-arrow span {
+      display: block;
+      font-size: 0.7rem;
+      color: var(--muted);
+      font-family: var(--mono);
+      margin-top: 4px;
+    }
+
+    /* Tools */
+    .tools-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .tool-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--card);
+      border-radius: 8px;
+      padding: 12px 16px;
+    }
+
+    .tool-name {
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--accent);
+    }
+
+    .tool-desc {
+      font-size: 0.8rem;
+      color: var(--muted);
+      text-align: right;
+    }
+
+    /* Batch demo */
+    .batch-demo {
+      background: var(--card);
+      border: 1px solid var(--accent);
+      border-radius: 12px;
+      padding: 32px;
+      margin-top: 32px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 32px;
+      align-items: center;
+    }
+
+    .batch-demo pre {
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--text);
+      line-height: 1.8;
+      overflow-x: auto;
+    }
+
+    .batch-demo .batch-info h3 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+
+    .batch-demo .batch-info p {
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    /* Setup steps */
+    .steps {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 24px;
+    }
+
+    .step {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px;
+    }
+
+    .step-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #000;
+      font-weight: 800;
+      font-size: 0.85rem;
+      margin-bottom: 12px;
+    }
+
+    .step h4 {
+      font-size: 1rem;
+      margin-bottom: 8px;
+    }
+
+    .step p {
+      font-size: 0.85rem;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .step code {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      background: var(--bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--cyan);
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 0;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .social-links {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      margin-bottom: 16px;
+    }
+
+    .social-links a {
+      color: var(--muted);
+      transition: color 0.2s;
+    }
+    .social-links a:hover { color: var(--text); text-decoration: none; }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .hero h1 { font-size: 2.5rem; }
+      .problem-grid, .tools-grid, .steps { grid-template-columns: 1fr; }
+      .arch-flow {
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+      .arch-arrow { transform: rotate(90deg); padding: 4px 0; }
+      .batch-demo { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container">
+      <svg class="hero-logo" xmlns="http://www.w3.org/2000/svg" viewBox="-20 -20 168 168">
+        <defs>
+          <filter id="fShadow" x="-25%" y="-15%" width="150%" height="160%">
+            <feGaussianBlur in="SourceAlpha" stdDeviation="6" result="shadowBlur"/>
+            <feOffset dx="4" dy="7" result="shadowOff"/>
+            <feFlood flood-color="#000000" flood-opacity="0.65" result="shadowColor"/>
+            <feComposite in="shadowColor" in2="shadowOff" operator="in" result="shadow"/>
+            <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <filter id="f3d" x="-10%" y="-10%" width="120%" height="120%">
+            <feGaussianBlur in="SourceAlpha" stdDeviation="2.5" result="blur"/>
+            <feSpecularLighting in="blur" surfaceScale="8" specularConstant="1.2" specularExponent="35" result="spec" lighting-color="#e0ffff">
+              <fePointLight x="-50" y="-70" z="130"/>
+            </feSpecularLighting>
+            <feComposite in="spec" in2="SourceAlpha" operator="in" result="specMask"/>
+            <feDiffuseLighting in="blur" surfaceScale="5" diffuseConstant="1.0" result="diff" lighting-color="#ccffee">
+              <fePointLight x="-40" y="-60" z="110"/>
+            </feDiffuseLighting>
+            <feComposite in="diff" in2="SourceAlpha" operator="in" result="diffMask"/>
+            <feComposite in="SourceGraphic" in2="diffMask" operator="arithmetic" k1="0" k2="0.55" k3="0.45" k4="0" result="lit"/>
+            <feComposite in="lit" in2="specMask" operator="arithmetic" k1="0" k2="1" k3="0.5" k4="0"/>
+          </filter>
+          <filter id="fGlow" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="glow"/>
+            <feColorMatrix in="glow" type="saturate" values="2" result="saturated"/>
+            <feMerge><feMergeNode in="saturated"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#0c1929"/><stop offset="100%" stop-color="#050d16"/>
+          </linearGradient>
+          <radialGradient id="gBody" cx="0.35" cy="0.3" r="0.7" fx="0.3" fy="0.25">
+            <stop offset="0%" stop-color="#b0f5e8"/><stop offset="25%" stop-color="#5dcaa5"/>
+            <stop offset="55%" stop-color="#1d9e75"/><stop offset="80%" stop-color="#0f6e56"/>
+            <stop offset="100%" stop-color="#04342c"/>
+          </radialGradient>
+          <radialGradient id="gHead" cx="0.38" cy="0.32" r="0.68" fx="0.33" fy="0.27">
+            <stop offset="0%" stop-color="#c0faf0"/><stop offset="25%" stop-color="#6ee0bb"/>
+            <stop offset="55%" stop-color="#2db08a"/><stop offset="80%" stop-color="#157a60"/>
+            <stop offset="100%" stop-color="#053d30"/>
+          </radialGradient>
+          <linearGradient id="gNeck" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#5dcaa5"/><stop offset="30%" stop-color="#1d9e75"/>
+            <stop offset="70%" stop-color="#0f6e56"/><stop offset="100%" stop-color="#085041"/>
+          </linearGradient>
+          <radialGradient id="gAntenna" cx="0.4" cy="0.3" r="0.55">
+            <stop offset="0%" stop-color="#ffffff"/><stop offset="25%" stop-color="#a0ffe0"/>
+            <stop offset="55%" stop-color="#22c55e"/><stop offset="100%" stop-color="#0a7a3a"/>
+          </radialGradient>
+          <radialGradient id="gSpec" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0%" stop-color="white" stop-opacity="0.75"/><stop offset="100%" stop-color="white" stop-opacity="0"/>
+          </radialGradient>
+          <linearGradient id="gAO" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="black" stop-opacity="0"/><stop offset="100%" stop-color="black" stop-opacity="0.45"/>
+          </linearGradient>
+        </defs>
+        <rect x="-20" y="-20" width="168" height="168" rx="32" fill="url(#bg)"/>
+        <ellipse cx="64" cy="70" rx="45" ry="50" fill="#1d9e75" opacity="0.08"/>
+        <g filter="url(#fShadow)">
+          <g opacity="0.5">
+            <g transform="translate(3, 5)">
+              <path d="M32 76 Q32 65 41 63 L55 59 Q64 57 73 59 L87 63 Q96 65 96 76 L96 102 Q96 110 87 110 L41 110 Q32 110 32 102 Z" fill="#021a14"/>
+              <rect x="38" y="18" width="52" height="38" rx="13" fill="#021a14"/>
+              <rect x="55" y="52" width="18" height="14" rx="5" fill="#021a14"/>
+            </g>
+            <g transform="translate(2, 3.5)">
+              <path d="M32 76 Q32 65 41 63 L55 59 Q64 57 73 59 L87 63 Q96 65 96 76 L96 102 Q96 110 87 110 L41 110 Q32 110 32 102 Z" fill="#042e24"/>
+              <rect x="38" y="18" width="52" height="38" rx="13" fill="#042e24"/>
+              <rect x="55" y="52" width="18" height="14" rx="5" fill="#042e24"/>
+            </g>
+            <g transform="translate(1, 2)">
+              <path d="M32 76 Q32 65 41 63 L55 59 Q64 57 73 59 L87 63 Q96 65 96 76 L96 102 Q96 110 87 110 L41 110 Q32 110 32 102 Z" fill="#064538"/>
+              <rect x="38" y="18" width="52" height="38" rx="13" fill="#064538"/>
+              <rect x="55" y="52" width="18" height="14" rx="5" fill="#064538"/>
+            </g>
+          </g>
+          <path d="M32 76 Q32 65 41 63 L55 59 Q64 57 73 59 L87 63 Q96 65 96 76 L96 102 Q96 110 87 110 L41 110 Q32 110 32 102 Z" fill="none" stroke="#021a14" stroke-width="2.5" opacity="0.6"/>
+          <rect x="38" y="18" width="52" height="38" rx="13" fill="none" stroke="#021a14" stroke-width="2.5" opacity="0.6"/>
+          <g filter="url(#f3d)">
+            <path d="M32 76 Q32 65 41 63 L55 59 Q64 57 73 59 L87 63 Q96 65 96 76 L96 102 Q96 110 87 110 L41 110 Q32 110 32 102 Z" fill="url(#gBody)"/>
+          </g>
+          <ellipse cx="52" cy="72" rx="18" ry="10" fill="url(#gSpec)" opacity="0.6"/>
+          <path d="M32 76 Q32 65 41 63 L55 59 Q64 57 73 59 L87 63 Q96 65 96 76 L96 102 Q96 110 87 110 L41 110 Q32 110 32 102 Z" fill="url(#gAO)" opacity="0.4"/>
+          <text x="64" y="95" text-anchor="middle" font-family="system-ui, sans-serif" font-size="16" font-weight="800" fill="#042e24" letter-spacing="4" opacity="0.5">NPC</text>
+          <line x1="46" y1="79" x2="82" y2="79" stroke="#b0f5e8" stroke-width="0.8" opacity="0.25"/>
+          <rect x="55" y="52" width="18" height="14" rx="5" fill="url(#gNeck)"/>
+          <g filter="url(#f3d)">
+            <rect x="38" y="18" width="52" height="38" rx="13" fill="url(#gHead)"/>
+          </g>
+          <ellipse cx="52" cy="27" rx="16" ry="9" fill="url(#gSpec)" opacity="0.6"/>
+          <rect x="38" y="18" width="52" height="38" rx="13" fill="url(#gAO)" opacity="0.35"/>
+          <circle cx="52" cy="38" r="6" fill="#050d16"/>
+          <circle cx="76" cy="38" r="6" fill="#050d16"/>
+          <circle cx="52" cy="37.5" r="3.5" fill="#5dcaa5"/>
+          <circle cx="76" cy="37.5" r="3.5" fill="#5dcaa5"/>
+          <circle cx="54.5" cy="35" r="1.8" fill="white" opacity="0.95"/>
+          <circle cx="78.5" cy="35" r="1.8" fill="white" opacity="0.95"/>
+          <line x1="64" y1="18" x2="64" y2="6" stroke="#1d9e75" stroke-width="3" stroke-linecap="round"/>
+          <g filter="url(#fGlow)">
+            <circle cx="64" cy="5" r="5" fill="url(#gAntenna)"/>
+          </g>
+        </g>
+      </svg>
+
+      <h1>NPC</h1>
+      <p class="tagline">Your browser's NPC. Handles the side quests.</p>
+      <p class="sub">Control your real browser from any IDE - no context switching.</p>
+
+      <div class="hero-actions">
+        <a href="https://github.com/freyzo/npc" class="btn btn-secondary">GitHub</a>
+        <a href="https://www.npmjs.com/package/npc-agent" class="btn btn-primary">npm i -g npc-agent</a>
+      </div>
+
+      <div class="install-cmd" onclick="navigator.clipboard.writeText('npm i -g npc-agent'); this.querySelector('.copy-hint').textContent = 'copied!';">
+        $ npm i -g npc-agent <span class="copy-hint">click to copy</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Problem / Solution -->
+  <section>
+    <div class="container">
+      <div class="section-label">Why</div>
+      <h2>Stop context switching</h2>
+      <div class="problem-grid">
+        <div class="problem-card">
+          <h3>The problem</h3>
+          <p>You're deep in code and need to message someone on Slack, check Discord, or reply to an email. Every time, you leave your editor, lose focus, and break flow.</p>
+          <br/>
+          <p>Browser automation tools want API keys, OAuth tokens, or separate bot accounts for every service. That's a lot of setup for "send a message."</p>
+        </div>
+        <div class="solution-card">
+          <h3>NPC fixes this</h3>
+          <p>One CLI + one Chrome extension. Your IDE agent says what to do ("message Tim on Slack"), NPC does it in your real, logged-in browser.</p>
+          <br/>
+          <p>No API keys per service. No OAuth. Uses the browser sessions you already have. Works with any MCP IDE - Cursor, VS Code, Windsurf.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture -->
+  <section>
+    <div class="container">
+      <div class="section-label">How it works</div>
+      <h2>Three pieces, one pipeline</h2>
+      <p class="section-desc">Your IDE handles reasoning. NPC is the hands - it executes browser actions via Chrome DevTools Protocol. No LLM inside NPC.</p>
+
+      <div style="margin-top: 40px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; overflow-x: auto;">
+        <img src="npc.svg" alt="NPC system design - IDE to browser pipeline" style="width: 100%; height: auto; display: block;" />
+      </div>
+
+      <div class="arch-flow" style="margin-top: 32px;">
+        <div class="arch-box">
+          <h4>Your IDE</h4>
+          <p>Cursor, VS Code, Windsurf</p>
+          <div class="tech">MCP client</div>
+        </div>
+        <div class="arch-arrow">
+          &rarr;
+          <span>stdio</span>
+        </div>
+        <div class="arch-box">
+          <h4>NPC CLI</h4>
+          <p>MCP server + WebSocket relay</p>
+          <div class="tech">localhost:7221</div>
+        </div>
+        <div class="arch-arrow">
+          &rarr;
+          <span>CDP</span>
+        </div>
+        <div class="arch-box">
+          <h4>Chrome Extension</h4>
+          <p>chrome.debugger API</p>
+          <div class="tech">any web page</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tools -->
+  <section>
+    <div class="container">
+      <div class="section-label">Tools</div>
+      <h2>13 MCP tools</h2>
+      <p class="section-desc">Everything you need to read and control a browser tab.</p>
+
+      <div class="tools-grid">
+        <div class="tool-row"><span class="tool-name">npc_screenshot</span><span class="tool-desc">Capture tab as PNG</span></div>
+        <div class="tool-row"><span class="tool-name">npc_batch</span><span class="tool-desc">Chain actions in one call</span></div>
+        <div class="tool-row"><span class="tool-name">npc_navigate</span><span class="tool-desc">Go to URL, back, forward</span></div>
+        <div class="tool-row"><span class="tool-name">npc_evaluate</span><span class="tool-desc">Run JS in page context</span></div>
+        <div class="tool-row"><span class="tool-name">npc_click</span><span class="tool-desc">Click at (x, y)</span></div>
+        <div class="tool-row"><span class="tool-name">npc_extract_text</span><span class="tool-desc">Get page text</span></div>
+        <div class="tool-row"><span class="tool-name">npc_type</span><span class="tool-desc">Type into focused element</span></div>
+        <div class="tool-row"><span class="tool-name">npc_extract_html</span><span class="tool-desc">Get page HTML</span></div>
+        <div class="tool-row"><span class="tool-name">npc_press_key</span><span class="tool-desc">Enter, Tab, Escape...</span></div>
+        <div class="tool-row"><span class="tool-name">npc_current_url</span><span class="tool-desc">Get current URL</span></div>
+        <div class="tool-row"><span class="tool-name">npc_scroll</span><span class="tool-desc">Scroll any direction</span></div>
+        <div class="tool-row"><span class="tool-name">npc_page_title</span><span class="tool-desc">Get current title</span></div>
+        <div class="tool-row"><span class="tool-name">npc_find</span><span class="tool-desc">Find by selector or text</span></div>
+      </div>
+
+      <div class="batch-demo">
+        <pre><code>{ "actions": [
+  { "action": "find", "selector": "Message Tim" },
+  { "action": "click", "x": 450, "y": 320 },
+  { "action": "type", "text": "deploy is done" },
+  { "action": "key", "key": "Enter" }
+]}</code></pre>
+        <div class="batch-info">
+          <h3>npc_batch</h3>
+          <p>One MCP call. Four actions. Sub-second execution. No round trip overhead between steps.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Setup -->
+  <section>
+    <div class="container">
+      <div class="section-label">Get started</div>
+      <h2>Three steps, two minutes</h2>
+
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <h4>Install the CLI</h4>
+          <p><code>npm i -g npc-agent</code></p>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <h4>Load the extension</h4>
+          <p>Open <code>chrome://extensions</code>, enable Developer mode, click Load unpacked, select the <code>extension/</code> folder.</p>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <h4>Add to your IDE</h4>
+          <p>Add NPC to <code>.cursor/mcp.json</code> or <code>.vscode/mcp.json</code> and start asking your agent to control the browser.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <div class="social-links">
+        <a href="https://github.com/freyzo/npc">GitHub</a>
+        <a href="https://www.npmjs.com/package/npc-agent">npm</a>
+        <a href="https://x.com/freyazou">X</a>
+        <a href="https://www.linkedin.com/in/freya-zou-068615252/">LinkedIn</a>
+        <a href="https://freyazou.com">freyazou.com</a>
+      </div>
+      <p>Built by <a href="https://freyazou.com">Freya Zou</a></p>
+    </div>
+  </footer>
+
+</body>
+</html>
