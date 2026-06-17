@@ -1,0 +1,43 @@
+---
+description: Browser automation - always use NPC + Brave, never Cursor internal browser
+alwaysApply: true
+---
+
+# Browser automation
+
+Use **NPC MCP tools** (`npc_*`) to control the user's **Brave browser** via the NPC extension.
+
+**Never** use `cursor-ide-browser` or built-in Browser Tab tools for browser tasks.
+
+## Setup (user must have done this)
+
+1. NPC extension loaded in Brave (`brave://extensions`)
+2. NPC icon clicked on the active tab (green badge = connected)
+
+## Tool mapping
+
+| Task | Use |
+|------|-----|
+| Screenshot | `npc_screenshot` (optional `savePath` to save to disk) |
+| Navigate | `npc_navigate` |
+| Click | `npc_click` |
+| Type | `npc_type` |
+| Press key | `npc_press_key` |
+| Scroll | `npc_scroll` |
+| Find element | `npc_find` (CSS selector or text content) |
+| Batch actions | `npc_batch` (array of actions in one call) |
+| Read page text | `npc_extract_text` |
+| Run JS | `npc_evaluate` |
+| Current URL | `npc_current_url` |
+
+## Performance
+
+Prefer `npc_batch` for multi-step sequences (click + type + enter). One round-trip instead of three.
+
+Prefer `npc_find` over screenshot-then-guess-coordinates. It returns center (x, y) ready for clicking.
+
+## If tools fail
+
+- Red `!` on NPC icon -> relay not running
+- Gray icon -> click NPC icon on the tab you want to control
+- Green `1` badge -> ready

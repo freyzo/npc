@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+.env.*
+screenshot.png
+fb-*.png
+.DS_Store
