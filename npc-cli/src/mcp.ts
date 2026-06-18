@@ -9,7 +9,7 @@ import { mkdirSync } from 'fs'
 export function createMCPServer(relay: NPCRelay): McpServer {
   const server = new McpServer({
     name: 'npc',
-    version: '0.2.0'
+    version: '1.0.0'
   })
 
   async function getCDP(): Promise<CDP> {

@@ -84,6 +84,7 @@ export class CDP {
     // Try insertText first, then force React/Vue synthetic events via DOM
     await this.relay.cdp('Input.insertText', { text }, this.sessionId)
     // Dispatch input + change events so React controlled inputs pick up the value
+    const escaped = JSON.stringify(text)
     await this.evaluate(`
       (() => {
         const el = document.activeElement;
@@ -91,10 +92,17 @@ export class CDP {
         // For contenteditable divs (Messenger, Slack, etc.) insertText already works
         if (el.isContentEditable) return;
         // For input/textarea with React, force the native setter + events
+        const newText = ${escaped};
         const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
         const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
         if (nativeSetter) {
-          nativeSetter.call(el, el.value);
+          // insertText may fail on React controlled inputs that block uncontrolled changes.
+          // If the value doesn't contain the new text, force it through the native setter.
+          if (!el.value.includes(newText)) {
+            nativeSetter.call(el, el.value + newText);
+          } else {
+            nativeSetter.call(el, el.value);
+          }
         }
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
