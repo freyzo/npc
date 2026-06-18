@@ -35,8 +35,8 @@
     </filter>
 
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#0c1929"/>
-      <stop offset="100%" stop-color="#050d16"/>
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#ffffff"/>
     </linearGradient>
 
     <radialGradient id="gBody" cx="0.35" cy="0.3" r="0.7" fx="0.3" fy="0.25">
@@ -81,7 +81,7 @@
   </defs>
 
   <rect x="-20" y="-20" width="168" height="168" rx="32" fill="url(#bg)"/>
-  <ellipse cx="64" cy="70" rx="45" ry="50" fill="#1d9e75" opacity="0.08"/>
+  <ellipse cx="64" cy="70" rx="45" ry="50" fill="#1d9e75" opacity="0.04"/>
 
   <g filter="url(#fShadow)">
 
