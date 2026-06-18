@@ -251,6 +251,151 @@ Stops on first error. Example: [{"action":"find","selector":"Message Tim"},{"act
     }
   )
 
+  // ── npc_fetch ────────────────────────────────────────────────────────────────
+
+  server.tool(
+    'npc_fetch',
+    `Fetch a URL using the browser extension - bypasses CORS and includes the user's cookies/session for that domain.
+Use this to hit APIs the user is already logged into (Microsoft Graph, GitHub, Slack, etc.) without separate auth.
+The extension forwards cookies from the browser's cookie jar for the target URL's domain.
+For APIs needing a Bearer token (like Graph API), extract the token from the page first via npc_evaluate, then pass it in headers.`,
+    {
+      url: z.string().describe('URL to fetch'),
+      method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).optional().default('GET').describe('HTTP method'),
+      headers: z.record(z.string()).optional().describe('Custom headers (e.g. {"Authorization": "Bearer xxx"})'),
+      body: z.string().optional().describe('Request body for POST/PUT/PATCH')
+    },
+    async ({ url, method, headers, body }) => {
+      const options: Record<string, any> = { method }
+      if (headers) options.headers = headers
+      if (body) options.body = body
+      const result = await relay.fetch(url, options)
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(result, null, 2)
+        }]
+      }
+    }
+  )
+
+  // ── npc_teams_unread ────────────────────────────────────────────────────────
+
+  server.tool(
+    'npc_teams_unread',
+    `Check Microsoft Teams for unread messages. Works by inspecting the Teams web app DOM.
+If the browser is already on teams.microsoft.com, reads the current page. Otherwise navigates there first.
+Returns: unread count from page title, list of chats with unread badges, and recent message previews.
+Requires the user to be logged into Teams in the browser.`,
+    {
+      navigate: z.boolean().optional().default(true).describe('Navigate to Teams if not already there (default true)')
+    },
+    async ({ navigate }) => {
+      const cdp = await getCDP()
+      const currentUrl = await cdp.currentUrl().catch(() => '')
+
+      // Navigate to Teams if needed
+      const isOnTeams = currentUrl.includes('teams.microsoft.com') || currentUrl.includes('teams.live.com')
+      if (!isOnTeams && navigate) {
+        await cdp.navigate('https://teams.microsoft.com/v2/')
+        // Wait for Teams to load - it's a heavy SPA
+        await cdp.waitForElement('[data-tid="chat-list"]', 15000).catch(() => null)
+        // Extra settle time for React hydration
+        await new Promise(r => setTimeout(r, 2000))
+      } else if (!isOnTeams && !navigate) {
+        return {
+          content: [{ type: 'text', text: 'Not on Teams and navigate=false. Set navigate=true or navigate to teams.microsoft.com first.' }]
+        }
+      }
+
+      // Extract unread state from the DOM
+      const result = await cdp.evaluate<{
+        titleCount: number | null
+        unreadChats: Array<{ name: string; preview: string; time: string }>
+        totalUnread: number
+        loggedIn: boolean
+      }>(`
+        (() => {
+          // Check if we're on a login page
+          const isLogin = window.location.hostname.includes('login.microsoftonline.com') ||
+                          window.location.hostname.includes('login.live.com') ||
+                          document.querySelector('[data-testid="login"]') !== null;
+          if (isLogin) return { titleCount: null, unreadChats: [], totalUnread: 0, loggedIn: false };
+
+          // 1. Title-based count - most resilient
+          //    Teams shows "(3) Microsoft Teams" or "(3) Chat | Microsoft Teams"
+          const titleMatch = document.title.match(/^\\((\\d+)\\)/);
+          const titleCount = titleMatch ? parseInt(titleMatch[1]) : null;
+
+          // 2. Chat list unread badges - scrape the sidebar
+          const unreadChats = [];
+          // Teams v2 uses various selectors for unread indicators
+          const chatItems = document.querySelectorAll(
+            '[data-tid="chat-list-item"], ' +
+            '[role="treeitem"], ' +
+            '[data-testid="chat-list-item"], ' +
+            '.chat-list-item'
+          );
+
+          for (const item of chatItems) {
+            // Look for unread indicators: bold text, badge dots, aria-label with "unread"
+            const hasUnread =
+              item.querySelector('[class*="unread"], [class*="badge"], [data-tid*="unread"]') !== null ||
+              (item.getAttribute('aria-label') || '').toLowerCase().includes('unread') ||
+              item.querySelector('b, strong, [style*="font-weight: bold"], [style*="font-weight:700"]') !== null;
+
+            if (hasUnread) {
+              const nameEl = item.querySelector('[data-tid="chat-display-name"], [class*="displayName"], [class*="title"]');
+              const previewEl = item.querySelector('[data-tid="chat-last-message"], [class*="preview"], [class*="lastMessage"], [class*="subtitle"]');
+              const timeEl = item.querySelector('[data-tid="chat-timestamp"], [class*="timestamp"], time');
+              unreadChats.push({
+                name: (nameEl?.textContent || item.textContent || '').trim().slice(0, 100),
+                preview: (previewEl?.textContent || '').trim().slice(0, 200),
+                time: (timeEl?.textContent || timeEl?.getAttribute('datetime') || '').trim()
+              });
+            }
+          }
+
+          // 3. Fallback: check for notification badge on Chat icon in the left nav
+          let totalUnread = titleCount || 0;
+          if (!totalUnread) {
+            const chatNav = document.querySelector('[data-tid="app-bar-chat"] [class*="badge"], [aria-label*="Chat"] [class*="badge"]');
+            if (chatNav) {
+              const badgeText = chatNav.textContent?.trim();
+              totalUnread = parseInt(badgeText || '0') || (badgeText ? 1 : 0);
+            }
+          }
+
+          return { titleCount, unreadChats, totalUnread: Math.max(totalUnread, unreadChats.length), loggedIn: true };
+        })()
+      `)
+
+      if (!result.loggedIn) {
+        return {
+          content: [{ type: 'text', text: 'Teams login page detected - you need to log in first. Use npc_screenshot to see the login page, then npc_click/npc_type to authenticate.' }]
+        }
+      }
+
+      const lines: string[] = []
+      if (result.totalUnread > 0) {
+        lines.push(`${result.totalUnread} unread message${result.totalUnread > 1 ? 's' : ''}`)
+      } else {
+        lines.push('No unread messages')
+      }
+
+      if (result.unreadChats.length > 0) {
+        lines.push('')
+        for (const chat of result.unreadChats) {
+          const timePart = chat.time ? ` (${chat.time})` : ''
+          const previewPart = chat.preview ? ` - "${chat.preview}"` : ''
+          lines.push(`  ${chat.name}${timePart}${previewPart}`)
+        }
+      }
+
+      return { content: [{ type: 'text', text: lines.join('\n') }] }
+    }
+  )
+
   // ── npc_extract_text ────────────────────────────────────────────────────────
 
   server.tool(

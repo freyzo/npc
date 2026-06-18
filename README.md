@@ -93,6 +93,8 @@ The IDE handles reasoning. NPC just executes browser actions via Chrome DevTools
 | `npc_extract_html` | Get full page HTML |
 | `npc_current_url` | Get current tab URL |
 | `npc_page_title` | Get current tab title |
+| `npc_fetch` | Fetch any URL with browser cookies (bypasses CORS) |
+| `npc_teams_unread` | Check Microsoft Teams for unread messages |
 
 ### Batch example
 
