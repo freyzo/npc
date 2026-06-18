@@ -55,12 +55,13 @@ function connect() {
     console.log('[npc] WebSocket connected to relay');
     updateIcon();
     await new Promise(r => setTimeout(r, 500));
-    await autoAttachActiveTab();
+    if (connectedTabs.size === 0) {
+      await autoAttachActiveTab();
+    }
   };
   ws.onerror = () => {};
   ws.onclose = () => {
     ws = null;
-    connectedTabs.clear();
     updateIcon();
     setTimeout(connect, 3000);
   };
@@ -246,13 +247,16 @@ async function handleCDP({ method, params, sessionId }) {
 }
 
 async function attachTab(tabId) {
-  console.log('[npc] Attempting to attach tab:', tabId);
+  if (connectedTabs.has(tabId)) {
+    return { targetInfo: { targetId: connectedTabs.get(tabId).targetId }, sessionId: connectedTabs.get(tabId).sessionId };
+  }
+
   try {
     await chrome.debugger.attach({ tabId }, '1.3');
-    console.log('[npc] Debugger attached to tab:', tabId);
   } catch (e) {
-    console.log('[npc] Attach failed:', e.message);
-    throw new Error('Could not attach to tab: ' + e.message);
+    if (!e.message.includes('Already attached')) {
+      throw new Error('Could not attach to tab: ' + e.message);
+    }
   }
 
   try {
@@ -303,6 +307,24 @@ function detachTab(tabId) {
   updateIcon();
 }
 
+function detachAllTabs() {
+  for (const tabId of [...connectedTabs.keys()]) {
+    const info = connectedTabs.get(tabId);
+    connectedTabs.delete(tabId);
+    chrome.debugger.detach({ tabId }).catch(() => {});
+    if (info && ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        method: 'forwardCDPEvent',
+        params: {
+          method: 'Target.detachedFromTarget',
+          params: { sessionId: info.sessionId, targetId: info.targetId }
+        }
+      }));
+    }
+  }
+  updateIcon();
+}
+
 function updateIcon() {
   const n = connectedTabs.size;
   const ok = ws?.readyState === WebSocket.OPEN;
@@ -320,41 +342,25 @@ chrome.debugger.onEvent.addListener((src, method, params) => {
 chrome.debugger.onDetach.addListener((src) => {
   if (connectedTabs.has(src.tabId)) {
     detachTab(src.tabId);
-    ensureConnected();
   }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (connectedTabs.has(tabId)) {
     detachTab(tabId);
-    ensureConnected();
   }
 });
 
-async function ensureConnected() {
-  if (ws?.readyState !== WebSocket.OPEN) return;
-  if (connectedTabs.size > 0) return;
-
-  console.log('[npc] No tabs connected, auto-attaching...');
-  await autoAttachActiveTab();
-}
-
 chrome.action.onClicked.addListener(async (tab) => {
-  console.log('[npc] Extension icon clicked, tab:', tab?.id, tab?.url);
-  if (!tab.id || !isAttachable(tab.url)) {
-    console.log('[npc] Skipping non-attachable page');
-    return;
-  }
+  if (!tab.id || !isAttachable(tab.url)) return;
 
   if (connectedTabs.has(tab.id)) {
-    console.log('[npc] Tab already connected, detaching');
     detachTab(tab.id);
   } else {
-    console.log('[npc] Connecting to relay and attaching tab');
+    detachAllTabs();
     connect();
     try {
       await attachTab(tab.id);
-      console.log('[npc] Successfully attached tab');
     } catch (e) {
       console.log('[npc] Failed to attach:', e.message);
     }
@@ -363,18 +369,12 @@ chrome.action.onClicked.addListener(async (tab) => {
 
 connect();
 
-setInterval(() => {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    connect();
-  } else if (connectedTabs.size === 0) {
-    autoAttachActiveTab();
-  }
-}, 3000);
-
 chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'keepalive') {
-    if (ws?.readyState === WebSocket.OPEN) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      connect();
+    } else if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ method: 'ping' }));
     }
   }
@@ -384,7 +384,6 @@ let autoAttaching = false;
 async function autoAttachActiveTab() {
   if (autoAttaching) return;
   autoAttaching = true;
-  console.log('[npc] autoAttachActiveTab called');
   try {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
 
@@ -393,7 +392,6 @@ async function autoAttachActiveTab() {
         if (!connectedTabs.has(tab.id)) {
           try {
             await attachTab(tab.id);
-            console.log('[npc] Auto-attached to tab:', tab.url);
             return;
           } catch (e) {
             console.log('[npc] Failed to attach tab:', tab.id, e.message);
@@ -401,7 +399,6 @@ async function autoAttachActiveTab() {
         }
       }
     }
-    console.log('[npc] No valid tabs found to attach');
   } catch (e) {
     console.log('[npc] Auto-attach failed:', e.message);
   } finally {
@@ -411,41 +408,11 @@ async function autoAttachActiveTab() {
 
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   if (ws?.readyState !== WebSocket.OPEN) return;
+  if (connectedTabs.size > 0) return;
   try {
     const tab = await chrome.tabs.get(activeInfo.tabId);
-    if (tab && isAttachable(tab.url)) {
-      if (!connectedTabs.has(tab.id)) {
-        await attachTab(tab.id);
-        console.log('[npc] Auto-attached on tab switch:', tab.url);
-      }
-    }
-  } catch {}
-});
-
-chrome.tabs.onCreated.addListener(async (tab) => {
-  if (ws?.readyState !== WebSocket.OPEN) return;
-  if (connectedTabs.size > 0) return;
-
-  await new Promise(r => setTimeout(r, 1000));
-
-  try {
-    const updatedTab = await chrome.tabs.get(tab.id);
-    if (updatedTab && isAttachable(updatedTab.url)) {
+    if (tab && isAttachable(tab.url) && !connectedTabs.has(tab.id)) {
       await attachTab(tab.id);
-      console.log('[npc] Auto-attached to new tab:', updatedTab.url);
     }
   } catch {}
-});
-
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  if (changeInfo.status !== 'complete') return;
-  if (ws?.readyState !== WebSocket.OPEN) return;
-  if (connectedTabs.size > 0) return;
-
-  if (tab && isAttachable(tab.url)) {
-    try {
-      await attachTab(tabId);
-      console.log('[npc] Auto-attached on tab load:', tab.url);
-    } catch {}
-  }
 });

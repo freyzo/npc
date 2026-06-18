@@ -9,15 +9,19 @@ Use **NPC MCP tools** (`npc_*`) to control the user's **Brave browser** via the 
 
 **Never** use `cursor-ide-browser` or built-in Browser Tab tools for browser tasks.
 
-## Setup (user must have done this)
+**Never** fall back to `curl`, `wget`, `fetch`, or any API call when NPC tools fail. If NPC is not connected, tell the user to click the NPC icon on a Brave tab and wait. Do NOT silently switch to an API workaround.
 
-1. NPC extension loaded in Brave (`brave://extensions`)
-2. NPC icon clicked on the active tab (green badge = connected)
+## Startup sequence
+
+1. Call `npc_status` first to check connection
+2. If `extensionConnected: false` or `sessionId: null`, tell the user to click the NPC icon on a tab
+3. Only proceed with browser commands after `npc_status` shows a valid session
 
 ## Tool mapping
 
 | Task | Use |
 |------|-----|
+| Check health | `npc_status` |
 | Screenshot | `npc_screenshot` (optional `savePath` to save to disk) |
 | Navigate | `npc_navigate` |
 | Click | `npc_click` |
@@ -25,6 +29,7 @@ Use **NPC MCP tools** (`npc_*`) to control the user's **Brave browser** via the 
 | Press key | `npc_press_key` |
 | Scroll | `npc_scroll` |
 | Find element | `npc_find` (CSS selector or text content) |
+| Wait for element | `npc_wait_for` (polls until element appears) |
 | Batch actions | `npc_batch` (array of actions in one call) |
 | Read page text | `npc_extract_text` |
 | Run JS | `npc_evaluate` |
@@ -36,8 +41,11 @@ Prefer `npc_batch` for multi-step sequences (click + type + enter). One round-tr
 
 Prefer `npc_find` over screenshot-then-guess-coordinates. It returns center (x, y) ready for clicking.
 
+Use `npc_wait_for` after navigation or SPA route changes instead of screenshot-retry loops.
+
 ## If tools fail
 
-- Red `!` on NPC icon -> relay not running
+- Red `!` on NPC icon -> relay not running (`cd ~/Desktop/npc/npc-cli && npm run relay`)
 - Gray icon -> click NPC icon on the tab you want to control
 - Green `1` badge -> ready
+- "Not connected" -> extension WS dropped, click NPC icon again

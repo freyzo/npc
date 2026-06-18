@@ -12,9 +12,11 @@ export function createMCPServer(relay: NPCRelay): McpServer {
     version: '0.2.0'
   })
 
-  function getCDP(): CDP {
-    const sid = relay.activeSession
-    if (!sid) throw new Error('No active browser session. Is the Chrome extension connected?')
+  async function getCDP(): Promise<CDP> {
+    let sid = relay.activeSession
+    if (!sid) {
+      sid = await relay.waitForReady(15_000)
+    }
     return new CDP(relay, sid)
   }
 
@@ -27,7 +29,7 @@ export function createMCPServer(relay: NPCRelay): McpServer {
       savePath: z.string().optional().describe('Optional absolute file path to save the PNG to disk')
     },
     async ({ savePath }) => {
-      const cdp = getCDP()
+      const cdp = await getCDP()
       const { data, dpr } = await cdp.screenshot()
 
       if (savePath) {
@@ -61,7 +63,7 @@ export function createMCPServer(relay: NPCRelay): McpServer {
         if (e instanceof Error && e.message.startsWith('Blocked')) throw e
         throw new Error(`Invalid URL: ${url}`)
       }
-      const cdp = getCDP()
+      const cdp = await getCDP()
       await cdp.navigate(url)
       const title = await cdp.pageTitle().catch(() => '')
       return { content: [{ type: 'text', text: `Navigated to ${url} - "${title}"` }] }
@@ -78,7 +80,7 @@ export function createMCPServer(relay: NPCRelay): McpServer {
       y: z.number().describe('Y coordinate (pixels from top)')
     },
     async ({ x, y }) => {
-      const cdp = getCDP()
+      const cdp = await getCDP()
       await cdp.click(x, y)
       return { content: [{ type: 'text', text: `Clicked at (${x}, ${y})` }] }
     }
@@ -91,7 +93,7 @@ export function createMCPServer(relay: NPCRelay): McpServer {
     'Type text into the focused element in the real Chrome browser',
     { text: z.string().describe('Text to type') },
     async ({ text }) => {
-      const cdp = getCDP()
+      const cdp = await getCDP()
       await cdp.type(text)
       return { content: [{ type: 'text', text: `Typed "${text}"` }] }
     }
@@ -104,7 +106,7 @@ export function createMCPServer(relay: NPCRelay): McpServer {
     'Press a keyboard key in the real Chrome browser (Enter, Tab, Escape, ArrowDown, etc.)',
     { key: z.string().describe('Key name, e.g. "Return", "Tab", "Escape"') },
     async ({ key }) => {
-      const cdp = getCDP()
+      const cdp = await getCDP()
       await cdp.pressKey(key)
       return { content: [{ type: 'text', text: `Pressed ${key}` }] }
     }
@@ -120,7 +122,7 @@ export function createMCPServer(relay: NPCRelay): McpServer {
       amount: z.number().optional().default(500).describe('Pixels to scroll (default 500)')
     },
     async ({ direction, amount }) => {
-      const cdp = getCDP()
+      const cdp = await getCDP()
       await cdp.scroll(direction, amount)
       return { content: [{ type: 'text', text: `Scrolled ${direction} ${amount}px` }] }
     }
@@ -135,7 +137,7 @@ export function createMCPServer(relay: NPCRelay): McpServer {
       selector: z.string().describe('CSS selector (e.g. "button.submit") or text to find (e.g. "Send message")')
     },
     async ({ selector }) => {
-      const cdp = getCDP()
+      const cdp = await getCDP()
       const result = await cdp.findElement(selector)
       if (!result.found) {
         return { content: [{ type: 'text', text: `Element not found: "${selector}"` }] }
@@ -159,7 +161,7 @@ export function createMCPServer(relay: NPCRelay): McpServer {
       timeout: z.number().optional().default(10000).describe('Max wait time in ms (default 10000)')
     },
     async ({ selector, timeout }) => {
-      const cdp = getCDP()
+      const cdp = await getCDP()
       const result = await cdp.waitForElement(selector, timeout)
       if (!result.found) {
         return { content: [{ type: 'text', text: `Timed out after ${timeout}ms waiting for "${selector}"` }] }
@@ -226,7 +228,7 @@ Stops on first error. Example: [{"action":"find","selector":"Message Tim"},{"act
       })).describe('Array of actions to execute sequentially')
     },
     async ({ actions }) => {
-      const cdp = getCDP()
+      const cdp = await getCDP()
       const results = await cdp.executeBatch(actions)
 
       // If any action was a screenshot, include it as image content
@@ -256,7 +258,7 @@ Stops on first error. Example: [{"action":"find","selector":"Message Tim"},{"act
     'Get full text content from the real Chrome browser page',
     {},
     async () => {
-      const cdp = getCDP()
+      const cdp = await getCDP()
       const text = await cdp.extractText()
       return { content: [{ type: 'text', text }] }
     }
@@ -269,7 +271,7 @@ Stops on first error. Example: [{"action":"find","selector":"Message Tim"},{"act
     'Get full HTML from the real Chrome browser page',
     {},
     async () => {
-      const cdp = getCDP()
+      const cdp = await getCDP()
       const html = await cdp.extractHTML()
       return { content: [{ type: 'text', text: html }] }
     }
@@ -282,7 +284,7 @@ Stops on first error. Example: [{"action":"find","selector":"Message Tim"},{"act
     'Run JavaScript in the real Chrome browser page context and return the result',
     { expression: z.string().describe('JavaScript expression to evaluate') },
     async ({ expression }) => {
-      const cdp = getCDP()
+      const cdp = await getCDP()
       const result = await cdp.evaluate(expression)
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
     }
@@ -295,7 +297,7 @@ Stops on first error. Example: [{"action":"find","selector":"Message Tim"},{"act
     'Get the URL of the current tab in the real Chrome browser',
     {},
     async () => {
-      const cdp = getCDP()
+      const cdp = await getCDP()
       const url = await cdp.currentUrl()
       return { content: [{ type: 'text', text: url }] }
     }
@@ -308,7 +310,7 @@ Stops on first error. Example: [{"action":"find","selector":"Message Tim"},{"act
     'Get the title of the current tab in the real Chrome browser',
     {},
     async () => {
-      const cdp = getCDP()
+      const cdp = await getCDP()
       const title = await cdp.pageTitle()
       return { content: [{ type: 'text', text: title }] }
     }

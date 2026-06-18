@@ -1,93 +1,209 @@
 import { WebSocketServer, WebSocket } from 'ws'
 import { EventEmitter } from 'events'
-import { createServer } from 'http'
+import { createServer, request as httpRequest } from 'http'
 
 export class NPCRelay extends EventEmitter {
-  private wss: WebSocketServer
+  private wss: WebSocketServer | null = null
   private extensionWs: WebSocket | null = null
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>()
   private nextId = 1
   private sessionId: string | null = null
-  private sessions = new Map<string, string>() // sessionId -> targetId
+  private sessions = new Map<string, string>()
   private pingInterval: ReturnType<typeof setInterval> | null = null
+  private readyPromise: Promise<string> | null = null
+  private proxyMode = false
+  private proxyPollInterval: ReturnType<typeof setInterval> | null = null
 
-  constructor(private port = 7221) {
+  private constructor(private port = 7221) {
     super()
+    this.setMaxListeners(50)
+  }
 
-    // Use an HTTP server so we can inspect req.url per connection
-    const server = createServer(async (req, res) => {
-      if (req.method === 'POST' && req.url === '/cdp') {
-        let body = ''
-        req.on('data', chunk => { body += chunk })
-        req.on('end', async () => {
+  /** Create a relay - starts a server, or connects to an existing one if the port is taken. */
+  static async create(port = 7221): Promise<NPCRelay> {
+    const relay = new NPCRelay(port)
+    const bound = await relay.tryBind()
+    if (!bound) {
+      relay.startProxyMode()
+    }
+    return relay
+  }
+
+  /** Try to start the WebSocket server. Returns true if successful. */
+  private tryBind(): Promise<boolean> {
+    return new Promise((resolve) => {
+      const server = createServer(async (req, res) => {
+        if (req.method === 'POST' && req.url === '/cdp') {
+          let body = ''
+          req.on('data', chunk => { body += chunk })
+          req.on('end', async () => {
+            res.setHeader('Content-Type', 'application/json')
+            try {
+              const { method, params, sessionId } = JSON.parse(body)
+              if (!this.isConnected()) {
+                res.writeHead(503)
+                res.end(JSON.stringify({ error: 'Extension not connected' }))
+                return
+              }
+              if (!this.sessionId && !sessionId) {
+                await this.waitForReady(10000)
+              }
+              const result = await this.cdp(method, params ?? {}, sessionId)
+              res.end(JSON.stringify({ result }))
+            } catch (e: any) {
+              res.writeHead(500)
+              res.end(JSON.stringify({ error: e.message }))
+            }
+          })
+          return
+        }
+        if (req.method === 'POST' && req.url === '/attach') {
           res.setHeader('Content-Type', 'application/json')
           try {
-            const { method, params, sessionId } = JSON.parse(body)
             if (!this.isConnected()) {
               res.writeHead(503)
               res.end(JSON.stringify({ error: 'Extension not connected' }))
               return
             }
-            if (!this.sessionId && !sessionId) {
-              await this.waitForReady(10000)
-            }
-            const result = await this.cdp(method, params ?? {}, sessionId)
-            res.end(JSON.stringify({ result }))
+            const id = this.nextId++
+            await new Promise<void>((resolve, reject) => {
+              const timer = setTimeout(() => reject(new Error('attach timeout')), 10000)
+              const onSession = () => { clearTimeout(timer); this.removeListener('sessionReady', onSession); resolve() }
+              this.once('sessionReady', onSession)
+              this.extensionWs!.send(JSON.stringify({ id, method: 'attachActiveTab' }))
+            })
+            res.end(JSON.stringify({ sessionId: this.sessionId }))
           } catch (e: any) {
             res.writeHead(500)
             res.end(JSON.stringify({ error: e.message }))
           }
-        })
-        return
-      }
-      if (req.method === 'POST' && req.url === '/attach') {
-        res.setHeader('Content-Type', 'application/json')
-        try {
-          if (!this.isConnected()) {
-            res.writeHead(503)
-            res.end(JSON.stringify({ error: 'Extension not connected' }))
-            return
-          }
-          const id = this.nextId++
-          await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(() => reject(new Error('attach timeout')), 10000)
-            const onSession = () => { clearTimeout(timer); this.removeListener('sessionReady', onSession); resolve() }
-            this.once('sessionReady', onSession)
-            this.extensionWs!.send(JSON.stringify({ id, method: 'attachActiveTab' }))
-          })
-          res.end(JSON.stringify({ sessionId: this.sessionId }))
-        } catch (e: any) {
-          res.writeHead(500)
-          res.end(JSON.stringify({ error: e.message }))
+          return
         }
-        return
-      }
-      if (req.method === 'GET' && req.url === '/status') {
-        res.setHeader('Content-Type', 'application/json')
-        res.end(JSON.stringify({
-          connected: this.isConnected(),
-          sessionId: this.sessionId,
-          sessions: Object.fromEntries(this.sessions)
-        }))
-        return
-      }
-      res.writeHead(404)
-      res.end()
-    })
-    this.wss = new WebSocketServer({ server })
+        if (req.method === 'GET' && req.url === '/status') {
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({
+            connected: this.isConnected(),
+            sessionId: this.sessionId,
+            sessions: Object.fromEntries(this.sessions)
+          }))
+          return
+        }
+        res.writeHead(404)
+        res.end()
+      })
 
-    this.wss.on('connection', (ws, req) => {
-      const url = req.url ?? ''
-      if (url === '/extension' || url.startsWith('/extension')) {
-        this.handleExtension(ws)
-      }
-      // Unknown paths — ignore (future: /cli for remote control)
-    })
+      this.wss = new WebSocketServer({ server })
 
-    server.listen(port)
+      this.wss.on('connection', (ws, req) => {
+        const url = req.url ?? ''
+        if (url === '/extension' || url.startsWith('/extension')) {
+          this.handleExtension(ws)
+        }
+      })
+
+      server.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE') {
+          this.wss = null
+          resolve(false)
+          return
+        }
+        throw err
+      })
+
+      server.once('listening', () => resolve(true))
+      server.listen(this.port)
+    })
   }
 
-  // ─── Extension connection ───────────────────────────────────────────────────
+  /** Proxy mode: poll an existing relay via HTTP instead of running our own server. */
+  private startProxyMode() {
+    this.proxyMode = true
+    process.stderr.write(`[npc] Port ${this.port} in use - connecting to existing relay\n`)
+
+    // Poll /status every 2s to track session state
+    const poll = async () => {
+      try {
+        const status = await this.httpGet('/status')
+        const wasConnected = this.isConnected()
+        const hadSession = this.sessionId
+
+        if (status.connected && status.sessionId) {
+          // Fake an extension connection for the relay interface
+          this.extensionWs = { readyState: WebSocket.OPEN } as any
+          this.sessionId = status.sessionId
+          if (status.sessions) {
+            this.sessions = new Map(Object.entries(status.sessions))
+          }
+
+          if (!hadSession && this.sessionId) {
+            this.emit('sessionReady', this.sessionId)
+          }
+          if (!wasConnected) {
+            this.emit('extensionConnected')
+          }
+        } else {
+          if (wasConnected) {
+            this.extensionWs = null
+            this.sessionId = null
+            this.sessions.clear()
+            this.emit('extensionDisconnected')
+          }
+        }
+      } catch {
+        // Relay not reachable
+        if (this.extensionWs) {
+          this.extensionWs = null
+          this.sessionId = null
+          this.sessions.clear()
+          this.emit('extensionDisconnected')
+        }
+      }
+    }
+
+    poll()
+    this.proxyPollInterval = setInterval(poll, 2000)
+  }
+
+  private httpGet(path: string): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest({ hostname: 'localhost', port: this.port, path, method: 'GET' }, (res) => {
+        let data = ''
+        res.on('data', chunk => { data += chunk })
+        res.on('end', () => {
+          try { resolve(JSON.parse(data)) } catch { reject(new Error('Invalid JSON')) }
+        })
+      })
+      req.on('error', reject)
+      req.setTimeout(5000, () => { req.destroy(); reject(new Error('Timeout')) })
+      req.end()
+    })
+  }
+
+  private httpPost(path: string, body: any): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const payload = JSON.stringify(body)
+      const req = httpRequest({
+        hostname: 'localhost', port: this.port, path, method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
+      }, (res) => {
+        let data = ''
+        res.on('data', chunk => { data += chunk })
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(data)
+            if (parsed.error) reject(new Error(parsed.error))
+            else resolve(parsed.result)
+          } catch { reject(new Error('Invalid JSON')) }
+        })
+      })
+      req.on('error', reject)
+      req.setTimeout(35000, () => { req.destroy(); reject(new Error('Timeout')) })
+      req.write(payload)
+      req.end()
+    })
+  }
+
+  // ─── Extension connection (server mode only) ──────────────────────────────
 
   private handleExtension(ws: WebSocket) {
     const prev = this.extensionWs
@@ -102,7 +218,6 @@ export class NPCRelay extends EventEmitter {
     }
     this.emit('extensionConnected')
 
-    // Send keepalive pings every 20s (extension expects them)
     this.pingInterval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ method: 'ping' }))
@@ -113,7 +228,6 @@ export class NPCRelay extends EventEmitter {
       let msg: any
       try { msg = JSON.parse(raw.toString()) } catch { return }
 
-      // Responses to our commands (have an id)
       if (msg.id !== undefined) {
         const pending = this.pending.get(msg.id)
         if (pending) {
@@ -127,11 +241,9 @@ export class NPCRelay extends EventEmitter {
         return
       }
 
-      // CDP events forwarded from the extension
       if (msg.method === 'forwardCDPEvent') {
         const { method, params } = msg.params ?? {}
 
-        // Track sessions - store all, set most recent as active
         if (method === 'Target.attachedToTarget' && params?.sessionId) {
           this.sessions.set(params.sessionId, params.targetInfo?.targetId ?? '')
           this.sessionId = params.sessionId
@@ -140,7 +252,6 @@ export class NPCRelay extends EventEmitter {
         if (method === 'Target.detachedFromTarget' && params?.sessionId) {
           this.sessions.delete(params.sessionId)
           if (this.sessionId === params.sessionId) {
-            // Fall back to another session if available
             const remaining = [...this.sessions.keys()]
             this.sessionId = remaining.length > 0 ? remaining[remaining.length - 1] : null
           }
@@ -148,8 +259,6 @@ export class NPCRelay extends EventEmitter {
 
         this.emit('cdpEvent', { method, params })
       }
-
-      // Pong — nothing to do
     })
 
     ws.on('close', () => {
@@ -157,10 +266,10 @@ export class NPCRelay extends EventEmitter {
       this.extensionWs = null
       this.sessionId = null
       this.sessions.clear()
+      this.readyPromise = null
       if (this.pingInterval) clearInterval(this.pingInterval)
       this.pingInterval = null
 
-      // Reject all in-flight CDP commands immediately
       for (const [id, pending] of this.pending) {
         pending.reject(new Error('Extension disconnected'))
       }
@@ -176,15 +285,16 @@ export class NPCRelay extends EventEmitter {
 
   // ─── Public API ─────────────────────────────────────────────────────────────
 
-  /** Wait until the Chrome extension connects and a tab session is ready */
   async waitForReady(timeoutMs = 30_000): Promise<string> {
     if (this.sessionId) return this.sessionId
+    if (this.readyPromise) return this.readyPromise
 
-    return new Promise((resolve, reject) => {
+    this.readyPromise = new Promise<string>((resolve, reject) => {
       const cleanup = () => {
         clearTimeout(timer)
         this.removeListener('sessionReady', onSession)
         this.removeListener('extensionConnected', onExtension)
+        this.readyPromise = null
       }
 
       const timer = setTimeout(() => {
@@ -208,20 +318,26 @@ export class NPCRelay extends EventEmitter {
           resolve(this.sessionId)
           return
         }
-        // Ask extension to attach active tab (triggers Target.attachedToTarget event)
-        try {
-          const id = this.nextId++
-          this.extensionWs!.send(JSON.stringify({ id, method: 'attachActiveTab' }))
-        } catch {}
+        if (!this.proxyMode) {
+          try {
+            const id = this.nextId++
+            this.extensionWs!.send(JSON.stringify({ id, method: 'attachActiveTab' }))
+          } catch {}
+        }
       }
 
       this.once('sessionReady', onSession)
       this.once('extensionConnected', onExtension)
     })
+
+    return this.readyPromise
   }
 
-  /** Send a CDP command and await the response */
   async cdp(method: string, params: Record<string, any> = {}, sessionId?: string): Promise<any> {
+    if (this.proxyMode) {
+      return this.httpPost('/cdp', { method, params, sessionId: sessionId ?? this.sessionId })
+    }
+
     const sid = sessionId ?? this.sessionId
     if (!this.extensionWs || this.extensionWs.readyState !== WebSocket.OPEN) {
       throw new Error('Chrome extension not connected')
@@ -248,7 +364,6 @@ export class NPCRelay extends EventEmitter {
     })
   }
 
-  /** CORS-bypassing authenticated fetch via the extension */
   async fetch(url: string, options: Record<string, any> = {}): Promise<any> {
     if (!this.extensionWs || this.extensionWs.readyState !== WebSocket.OPEN) {
       throw new Error('Chrome extension not connected')
@@ -275,12 +390,18 @@ export class NPCRelay extends EventEmitter {
 
   get allSessions(): Map<string, string> { return new Map(this.sessions) }
 
+  get isProxy(): boolean { return this.proxyMode }
+
   isConnected(): boolean {
+    if (this.proxyMode) {
+      return this.extensionWs !== null
+    }
     return this.extensionWs?.readyState === WebSocket.OPEN
   }
 
   close() {
     if (this.pingInterval) clearInterval(this.pingInterval)
-    this.wss.close()
+    if (this.proxyPollInterval) clearInterval(this.proxyPollInterval)
+    if (this.wss) this.wss.close()
   }
 }

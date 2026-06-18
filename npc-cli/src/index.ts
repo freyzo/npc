@@ -46,7 +46,13 @@ if (process.argv.includes('--version') || process.argv.includes('-v')) {
 const PORT = parseInt(process.env.NPC_PORT || '7221', 10)
 const relayOnly = process.argv.includes('--relay-only')
 
-const relay = new NPCRelay(PORT)
+const relay = await NPCRelay.create(PORT)
+
+if (relay.isProxy) {
+  process.stderr.write(`[npc] connected to existing relay on port ${PORT}\n`)
+} else {
+  process.stderr.write(`[npc] relay listening on ws://localhost:${PORT}\n`)
+}
 
 relay.on('extensionConnected', () => {
   process.stderr.write('[npc] browser extension connected\n')
@@ -61,9 +67,11 @@ relay.on('extensionDisconnected', () => {
 process.on('SIGINT', () => { relay.close(); process.exit(0) })
 process.on('SIGTERM', () => { relay.close(); process.exit(0) })
 
-process.stderr.write(`[npc] relay listening on ws://localhost:${PORT}\n`)
-
 if (relayOnly) {
+  if (relay.isProxy) {
+    process.stderr.write('[npc] relay already running on this port - nothing to do\n')
+    process.exit(0)
+  }
   process.stderr.write('[npc] relay-only mode - load NPC extension in Brave, click icon on a tab\n')
 } else {
   const mcpServer = createMCPServer(relay)
