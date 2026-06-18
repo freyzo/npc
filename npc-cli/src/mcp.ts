@@ -149,17 +149,70 @@ export function createMCPServer(relay: NPCRelay): McpServer {
     }
   )
 
+  // ── npc_wait_for ────────────────────────────────────────────────────────────
+
+  server.tool(
+    'npc_wait_for',
+    'Wait for an element to appear on the page (by CSS selector or text). Polls every 500ms until found or timeout. Use after navigation or SPA route changes instead of screenshot-retry loops.',
+    {
+      selector: z.string().describe('CSS selector or text content to wait for'),
+      timeout: z.number().optional().default(10000).describe('Max wait time in ms (default 10000)')
+    },
+    async ({ selector, timeout }) => {
+      const cdp = getCDP()
+      const result = await cdp.waitForElement(selector, timeout)
+      if (!result.found) {
+        return { content: [{ type: 'text', text: `Timed out after ${timeout}ms waiting for "${selector}"` }] }
+      }
+      return {
+        content: [{
+          type: 'text',
+          text: `Found "${selector}" at (${result.x}, ${result.y}) - text: "${result.text}"`
+        }]
+      }
+    }
+  )
+
+  // ── npc_status ─────────────────────────────────────────────────────────────
+
+  server.tool(
+    'npc_status',
+    'Check NPC relay and extension health. Returns connection state, active session, and current URL. Call this before issuing commands to avoid wasted retries.',
+    {},
+    async () => {
+      const connected = relay.isConnected()
+      const session = relay.activeSession
+      let url = ''
+      let title = ''
+      if (connected && session) {
+        const cdp = new CDP(relay, session)
+        try {
+          [url, title] = await Promise.all([
+            cdp.currentUrl().catch(() => ''),
+            cdp.pageTitle().catch(() => '')
+          ])
+        } catch {}
+      }
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ relayUp: true, extensionConnected: connected, sessionId: session, url, title }, null, 2)
+        }]
+      }
+    }
+  )
+
   // ── npc_batch ───────────────────────────────────────────────────────────────
 
   server.tool(
     'npc_batch',
     `Execute multiple browser actions in a single call. Cuts MCP round-trip overhead.
 Each action is an object with an "action" field and relevant params.
-Actions: click(x,y), type(text), key(key), scroll(direction,amount), navigate(url), screenshot(), wait(ms), evaluate(expression), find(selector).
+Actions: click(x,y), type(text), key(key), scroll(direction,amount), navigate(url), screenshot(), wait(ms), evaluate(expression), find(selector), wait_for(selector,timeout).
 Stops on first error. Example: [{"action":"find","selector":"Message Tim"},{"action":"click","x":100,"y":200},{"action":"type","text":"hello"},{"action":"key","key":"Enter"}]`,
     {
       actions: z.array(z.object({
-        action: z.enum(['click', 'type', 'key', 'scroll', 'navigate', 'screenshot', 'wait', 'evaluate', 'find']),
+        action: z.enum(['click', 'type', 'key', 'scroll', 'navigate', 'screenshot', 'wait', 'evaluate', 'find', 'wait_for']),
         x: z.number().optional(),
         y: z.number().optional(),
         text: z.string().optional(),

@@ -1,7 +1,7 @@
 import type { NPCRelay } from './relay.js'
 
 export interface BatchAction {
-  action: 'click' | 'type' | 'key' | 'scroll' | 'navigate' | 'screenshot' | 'wait' | 'evaluate' | 'find'
+  action: 'click' | 'type' | 'key' | 'scroll' | 'navigate' | 'screenshot' | 'wait' | 'evaluate' | 'find' | 'wait_for'
   x?: number
   y?: number
   text?: string
@@ -74,12 +74,32 @@ export class CDP {
 
   async click(x: number, y: number): Promise<void> {
     const base = { x, y, button: 'left' as const, clickCount: 1, modifiers: 0 }
+    // mouseMoved first so React hover states and event listeners register
+    await this.relay.cdp('Input.dispatchMouseEvent', { ...base, type: 'mouseMoved' }, this.sessionId)
     await this.relay.cdp('Input.dispatchMouseEvent', { ...base, type: 'mousePressed' }, this.sessionId)
     await this.relay.cdp('Input.dispatchMouseEvent', { ...base, type: 'mouseReleased' }, this.sessionId)
   }
 
   async type(text: string): Promise<void> {
+    // Try insertText first, then force React/Vue synthetic events via DOM
     await this.relay.cdp('Input.insertText', { text }, this.sessionId)
+    // Dispatch input + change events so React controlled inputs pick up the value
+    await this.evaluate(`
+      (() => {
+        const el = document.activeElement;
+        if (!el) return;
+        // For contenteditable divs (Messenger, Slack, etc.) insertText already works
+        if (el.isContentEditable) return;
+        // For input/textarea with React, force the native setter + events
+        const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (nativeSetter) {
+          nativeSetter.call(el, el.value);
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      })()
+    `)
   }
 
   async pressKey(key: string): Promise<void> {
@@ -109,30 +129,54 @@ export class CDP {
       (() => {
         // Try CSS selector first
         let el = document.querySelector(${JSON.stringify(selector)});
-
-        // If no CSS match, search by text content
-        if (!el) {
-          const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-          const target = ${JSON.stringify(selector.toLowerCase())};
-          while (walk.nextNode()) {
-            const node = walk.currentNode;
-            const txt = (node.textContent || '').trim().toLowerCase();
-            const aria = (node.getAttribute('aria-label') || '').toLowerCase();
-            const placeholder = (node.getAttribute('placeholder') || '').toLowerCase();
-            if (txt === target || txt.includes(target) || aria.includes(target) || placeholder.includes(target)) {
-              el = node;
-              break;
-            }
-          }
+        if (el) {
+          const rect = el.getBoundingClientRect();
+          return { found: true, x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2), text: (el.textContent || '').trim().slice(0, 200) };
         }
 
-        if (!el) return { found: false, x: 0, y: 0, text: '' };
-        const rect = el.getBoundingClientRect();
+        // Text search - score candidates by clickability and specificity
+        const CLICKABLE = new Set(['A','BUTTON','INPUT','SELECT','TEXTAREA','SUMMARY','DETAILS']);
+        const CLICKABLE_ROLES = new Set(['button','link','menuitem','tab','option','checkbox','radio','switch','treeitem']);
+        const target = ${JSON.stringify(selector.toLowerCase())};
+        const candidates = [];
+        const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+
+        while (walk.nextNode()) {
+          const node = walk.currentNode;
+          const txt = (node.textContent || '').trim().toLowerCase();
+          const aria = (node.getAttribute('aria-label') || '').toLowerCase();
+          const placeholder = (node.getAttribute('placeholder') || '').toLowerCase();
+          const title = (node.getAttribute('title') || '').toLowerCase();
+          if (!(txt === target || txt.includes(target) || aria.includes(target) || placeholder.includes(target) || title.includes(target))) continue;
+
+          const rect = node.getBoundingClientRect();
+          if (rect.width === 0 || rect.height === 0) continue;
+
+          // Score: higher = better match
+          let score = 0;
+          // Prefer exact matches
+          if (txt === target || aria === target) score += 100;
+          // Prefer clickable elements
+          if (CLICKABLE.has(node.tagName)) score += 50;
+          if (CLICKABLE_ROLES.has((node.getAttribute('role') || '').toLowerCase())) score += 50;
+          if (node.getAttribute('onclick') || node.getAttribute('tabindex')) score += 20;
+          if (node.closest('a,button,[role="button"],[role="link"]')) score += 30;
+          // Prefer smaller (more specific) elements
+          score += Math.max(0, 50 - Math.floor((rect.width * rect.height) / 1000));
+          // Penalize huge containers
+          if (rect.width > 500 && rect.height > 300) score -= 40;
+
+          candidates.push({ node, score, rect, txt: (node.textContent || '').trim().slice(0, 200) });
+        }
+
+        if (candidates.length === 0) return { found: false, x: 0, y: 0, text: '' };
+        candidates.sort((a, b) => b.score - a.score);
+        const best = candidates[0];
         return {
           found: true,
-          x: Math.round(rect.x + rect.width / 2),
-          y: Math.round(rect.y + rect.height / 2),
-          text: (el.textContent || '').trim().slice(0, 200)
+          x: Math.round(best.rect.x + best.rect.width / 2),
+          y: Math.round(best.rect.y + best.rect.height / 2),
+          text: best.txt
         };
       })()
     `)
@@ -199,6 +243,13 @@ export class CDP {
             break
           }
 
+          case 'wait_for': {
+            const found = await this.waitForElement(act.selector ?? act.text ?? '', act.ms ?? 10000)
+            result = found
+            if (!found.found) throw new Error(`Timed out waiting for "${act.selector ?? act.text}"`)
+            break
+          }
+
           default:
             throw new Error(`Unknown action: ${act.action}`)
         }
@@ -243,6 +294,16 @@ export class CDP {
 
   async pageTitle(): Promise<string> {
     return this.evaluate<string>('document.title')
+  }
+
+  async waitForElement(selector: string, timeoutMs = 10_000): Promise<{ found: boolean; x: number; y: number; text: string }> {
+    const start = Date.now()
+    while (Date.now() - start < timeoutMs) {
+      const result = await this.findElement(selector)
+      if (result.found) return result
+      await new Promise(r => setTimeout(r, 500))
+    }
+    return { found: false, x: 0, y: 0, text: '' }
   }
 
   async viewportSize(): Promise<{ width: number; height: number }> {
