@@ -300,8 +300,8 @@ Requires the user to be logged into Teams in the browser.`,
         await cdp.navigate('https://teams.microsoft.com/v2/')
         // Wait for Teams to load - it's a heavy SPA
         await cdp.waitForElement('[data-tid="chat-list"]', 15000).catch(() => null)
-        // Extra settle time for React hydration
-        await new Promise(r => setTimeout(r, 2000))
+        // Wait for actual chat content instead of blanket sleep
+        await cdp.waitForElement('[data-tid="chat-list-item"]', 5000).catch(() => null)
       } else if (!isOnTeams && !navigate) {
         return {
           content: [{ type: 'text', text: 'Not on Teams and navigate=false. Set navigate=true or navigate to teams.microsoft.com first.' }]

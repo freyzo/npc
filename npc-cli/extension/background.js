@@ -109,7 +109,8 @@ function connect() {
         const fetchOpts = {
           method: options.method || 'GET',
           headers: {
-            ...(options.headers || { 'Accept': 'application/json' }),
+            'Accept': 'application/json',
+            ...(options.headers || {}),
             'Cookie': cookieString
           }
         };
@@ -481,7 +482,8 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
     // If this tab is already connected, nothing to do
     if (connectedTabs.has(tab.id)) return;
 
-    // Detach old tabs, attach the new active one
+    // Small delay to let in-flight CDP commands finish before switching
+    await new Promise(r => setTimeout(r, 50));
     detachAllTabs();
     await attachTab(tab.id);
   } catch {}

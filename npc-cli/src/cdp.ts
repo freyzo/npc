@@ -22,6 +22,8 @@ export interface BatchResult {
 }
 
 export class CDP {
+  private cachedDpr: number | null = null
+
   constructor(private relay: NPCRelay, private sessionId: string) {}
 
   // ─── Page ───────────────────────────────────────────────────────────────────
@@ -39,8 +41,11 @@ export class CDP {
   }
 
   async getDevicePixelRatio(): Promise<number> {
+    if (this.cachedDpr !== null) return this.cachedDpr
     try {
-      return await this.evaluate<number>('window.devicePixelRatio') || 1
+      const dpr = await this.evaluate<number>('window.devicePixelRatio') || 1
+      this.cachedDpr = dpr
+      return dpr
     } catch {
       return 1
     }
@@ -51,22 +56,35 @@ export class CDP {
     await this.waitForLoad()
   }
 
-  async waitForLoad(timeoutMs = 10_000): Promise<void> {
+  async waitForLoad(timeoutMs = 5_000): Promise<void> {
     return new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
+      let resolved = false
+      const done = () => {
+        if (resolved) return
+        resolved = true
+        clearTimeout(timer)
+        clearTimeout(readyCheckTimer)
         this.relay.removeListener('cdpEvent', onEvent)
         resolve()
-      }, timeoutMs)
+      }
+
+      const timer = setTimeout(done, timeoutMs)
 
       const onEvent = (evt: { method: string; params: any }) => {
-        if (evt.method === 'Page.loadEventFired') {
-          clearTimeout(timer)
-          this.relay.removeListener('cdpEvent', onEvent)
-          resolve()
+        if (evt.method === 'Page.loadEventFired' || evt.method === 'Page.frameStoppedLoading') {
+          done()
         }
       }
 
       this.relay.on('cdpEvent', onEvent)
+
+      // Fast-path: check readyState after 500ms for SPAs that never fire load events
+      const readyCheckTimer = setTimeout(async () => {
+        try {
+          const state = await this.evaluate<string>('document.readyState')
+          if (state === 'complete') done()
+        } catch {}
+      }, 500)
     })
   }
 
@@ -74,30 +92,28 @@ export class CDP {
 
   async click(x: number, y: number): Promise<void> {
     const base = { x, y, button: 'left' as const, clickCount: 1, modifiers: 0 }
-    // mouseMoved first so React hover states and event listeners register
-    await this.relay.cdp('Input.dispatchMouseEvent', { ...base, type: 'mouseMoved' }, this.sessionId)
-    await this.relay.cdp('Input.dispatchMouseEvent', { ...base, type: 'mousePressed' }, this.sessionId)
+    // Fire-and-forget first two - CDP guarantees in-order per session
+    this.relay.cdp('Input.dispatchMouseEvent', { ...base, type: 'mouseMoved' }, this.sessionId)
+    this.relay.cdp('Input.dispatchMouseEvent', { ...base, type: 'mousePressed' }, this.sessionId)
     await this.relay.cdp('Input.dispatchMouseEvent', { ...base, type: 'mouseReleased' }, this.sessionId)
   }
 
   async type(text: string): Promise<void> {
-    // Try insertText first, then force React/Vue synthetic events via DOM
+    // insertText handles contenteditable natively
     await this.relay.cdp('Input.insertText', { text }, this.sessionId)
-    // Dispatch input + change events so React controlled inputs pick up the value
+    // Skip React hack for contenteditable (Slack, Messenger) - insertText already worked
+    const isContentEditable = await this.evaluate<boolean>('document.activeElement?.isContentEditable ?? false')
+    if (isContentEditable) return
+    // Force React/Vue controlled inputs to pick up the value via native setter
     const escaped = JSON.stringify(text)
     await this.evaluate(`
       (() => {
         const el = document.activeElement;
         if (!el) return;
-        // For contenteditable divs (Messenger, Slack, etc.) insertText already works
-        if (el.isContentEditable) return;
-        // For input/textarea with React, force the native setter + events
         const newText = ${escaped};
         const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
         const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
         if (nativeSetter) {
-          // insertText may fail on React controlled inputs that block uncontrolled changes.
-          // If the value doesn't contain the new text, force it through the native setter.
           if (!el.value.includes(newText)) {
             nativeSetter.call(el, el.value + newText);
           } else {
@@ -120,11 +136,15 @@ export class CDP {
     await this.pressKey('Enter')
   }
 
-  async scroll(direction: 'up' | 'down', amount = 500): Promise<void> {
+  async scroll(direction: 'up' | 'down', amount = 500, x?: number, y?: number): Promise<void> {
+    if (x === undefined || y === undefined) {
+      const vp = await this.viewportSize()
+      x = x ?? Math.round(vp.width / 2)
+      y = y ?? Math.round(vp.height / 2)
+    }
     await this.relay.cdp('Input.dispatchMouseEvent', {
       type: 'mouseWheel',
-      x: 640,
-      y: 400,
+      x, y,
       deltaX: 0,
       deltaY: direction === 'down' ? amount : -amount
     }, this.sessionId)
@@ -135,17 +155,35 @@ export class CDP {
   async findElement(selector: string): Promise<{ found: boolean; x: number; y: number; text: string }> {
     const result = await this.evaluate<{ found: boolean; x: number; y: number; text: string }>(`
       (() => {
-        // Try CSS selector first
-        let el = document.querySelector(${JSON.stringify(selector)});
+        // Try CSS selector first (may throw on invalid CSS like plain text)
+        let el = null;
+        try { el = document.querySelector(${JSON.stringify(selector)}); } catch {}
         if (el) {
           const rect = el.getBoundingClientRect();
           return { found: true, x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2), text: (el.textContent || '').trim().slice(0, 200) };
         }
 
-        // Text search - score candidates by clickability and specificity
+        // Text search: XPath first (fast), TreeWalker fallback for scoring
         const CLICKABLE = new Set(['A','BUTTON','INPUT','SELECT','TEXTAREA','SUMMARY','DETAILS']);
         const CLICKABLE_ROLES = new Set(['button','link','menuitem','tab','option','checkbox','radio','switch','treeitem']);
         const target = ${JSON.stringify(selector.toLowerCase())};
+
+        // Fast path: XPath text contains - avoids full TreeWalker for simple text matches
+        try {
+          const xpath = document.evaluate(
+            '//*[contains(translate(text(),"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz"),' + JSON.stringify(target) + ')]',
+            document.body, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null
+          );
+          if (xpath.snapshotLength === 1) {
+            const node = xpath.snapshotItem(0);
+            const rect = node.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              return { found: true, x: Math.round(rect.x + rect.width/2), y: Math.round(rect.y + rect.height/2), text: (node.textContent||'').trim().slice(0,200) };
+            }
+          }
+        } catch {}
+
+        // Full TreeWalker with scoring for ambiguous matches
         const candidates = [];
         const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
 
@@ -160,18 +198,13 @@ export class CDP {
           const rect = node.getBoundingClientRect();
           if (rect.width === 0 || rect.height === 0) continue;
 
-          // Score: higher = better match
           let score = 0;
-          // Prefer exact matches
           if (txt === target || aria === target) score += 100;
-          // Prefer clickable elements
           if (CLICKABLE.has(node.tagName)) score += 50;
           if (CLICKABLE_ROLES.has((node.getAttribute('role') || '').toLowerCase())) score += 50;
           if (node.getAttribute('onclick') || node.getAttribute('tabindex')) score += 20;
           if (node.closest('a,button,[role="button"],[role="link"]')) score += 30;
-          // Prefer smaller (more specific) elements
           score += Math.max(0, 50 - Math.floor((rect.width * rect.height) / 1000));
-          // Penalize huge containers
           if (rect.width > 500 && rect.height > 300) score -= 40;
 
           candidates.push({ node, score, rect, txt: (node.textContent || '').trim().slice(0, 200) });
@@ -305,13 +338,43 @@ export class CDP {
   }
 
   async waitForElement(selector: string, timeoutMs = 10_000): Promise<{ found: boolean; x: number; y: number; text: string }> {
-    const start = Date.now()
-    while (Date.now() - start < timeoutMs) {
-      const result = await this.findElement(selector)
-      if (result.found) return result
-      await new Promise(r => setTimeout(r, 500))
-    }
-    return { found: false, x: 0, y: 0, text: '' }
+    // Single CDP call with MutationObserver instead of polling loop
+    const escapedSelector = JSON.stringify(selector)
+    const escapedLower = JSON.stringify(selector.toLowerCase())
+    const result = await this.evaluate<{ found: boolean; x: number; y: number; text: string }>(`
+      new Promise((resolve) => {
+        const timeout = ${timeoutMs};
+        const tryFind = () => {
+          let el = null;
+          try { el = document.querySelector(${escapedSelector}); } catch {}
+          if (el) {
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) return { found: true, x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2), text: (el.textContent||'').trim().slice(0,200) };
+          }
+          // Text fallback
+          const target = ${escapedLower};
+          const els = document.querySelectorAll('a,button,input,select,textarea,[role="button"],[role="link"],[role="menuitem"],[role="tab"]');
+          for (const node of els) {
+            const txt = (node.textContent||'').trim().toLowerCase();
+            const aria = (node.getAttribute('aria-label')||'').toLowerCase();
+            if (txt.includes(target) || aria.includes(target)) {
+              const r = node.getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) return { found: true, x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2), text: (node.textContent||'').trim().slice(0,200) };
+            }
+          }
+          return null;
+        };
+        const existing = tryFind();
+        if (existing) { resolve(existing); return; }
+        const obs = new MutationObserver(() => {
+          const found = tryFind();
+          if (found) { obs.disconnect(); resolve(found); }
+        });
+        obs.observe(document.body, { childList: true, subtree: true, attributes: true });
+        setTimeout(() => { obs.disconnect(); resolve({ found: false, x: 0, y: 0, text: '' }); }, timeout);
+      })
+    `)
+    return result
   }
 
   async viewportSize(): Promise<{ width: number; height: number }> {

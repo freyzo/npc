@@ -68,7 +68,6 @@ function shutdown() {
   relay.close()
   // Force exit after 500ms if cleanup hangs - don't hold the port
   setTimeout(() => process.exit(0), 500).unref()
-  process.exit(0)
 }
 process.on('SIGINT', shutdown)
 process.on('SIGTERM', shutdown)

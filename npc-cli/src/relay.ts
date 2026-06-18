@@ -60,10 +60,16 @@ export class NPCRelay extends EventEmitter {
   /** Try to start the WebSocket server. Returns true if successful. */
   private tryBind(): Promise<boolean> {
     return new Promise((resolve) => {
+      const MAX_BODY = 10 * 1024 * 1024 // 10MB
       const server = createServer(async (req, res) => {
         if (req.method === 'POST' && req.url === '/cdp') {
           let body = ''
-          req.on('data', chunk => { body += chunk })
+          let size = 0
+          req.on('data', chunk => {
+            size += chunk.length
+            if (size > MAX_BODY) { res.writeHead(413); res.end('Body too large'); req.destroy(); return }
+            body += chunk
+          })
           req.on('end', async () => {
             res.setHeader('Content-Type', 'application/json')
             try {
@@ -77,6 +83,35 @@ export class NPCRelay extends EventEmitter {
                 await this.waitForReady(10000)
               }
               const result = await this.cdp(method, params ?? {}, sessionId)
+              res.end(JSON.stringify({ result }))
+            } catch (e: any) {
+              res.writeHead(500)
+              res.end(JSON.stringify({ error: e.message }))
+            }
+          })
+          return
+        }
+        if (req.method === 'POST' && req.url === '/fetch') {
+          let body = ''
+          req.on('data', chunk => { body += chunk })
+          req.on('end', async () => {
+            res.setHeader('Content-Type', 'application/json')
+            try {
+              const { url, options } = JSON.parse(body)
+              if (!this.isConnected()) {
+                res.writeHead(503)
+                res.end(JSON.stringify({ error: 'Extension not connected' }))
+                return
+              }
+              const id = this.nextId++
+              const result = await new Promise((resolve, reject) => {
+                const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('Fetch timeout')) }, 30_000)
+                this.pending.set(id, {
+                  resolve: (v: any) => { clearTimeout(timer); resolve(v) },
+                  reject: (e: Error) => { clearTimeout(timer); reject(e) }
+                })
+                this.extensionWs!.send(JSON.stringify({ id, method: 'corsFetch', params: { url, options } }))
+              })
               res.end(JSON.stringify({ result }))
             } catch (e: any) {
               res.writeHead(500)
@@ -192,7 +227,8 @@ export class NPCRelay extends EventEmitter {
     }
 
     poll()
-    this.proxyPollInterval = setInterval(poll, 2000)
+    const pollMs = parseInt(process.env.NPC_POLL_MS || '1000', 10)
+    this.proxyPollInterval = setInterval(poll, pollMs)
   }
 
   private httpGet(path: string): Promise<any> {
@@ -241,6 +277,12 @@ export class NPCRelay extends EventEmitter {
     if (prev && prev !== ws) {
       prev.close()
     }
+
+    // Flush stale pending promises from previous connection
+    for (const [id, p] of this.pending) {
+      p.reject(new Error('Extension reconnected'))
+    }
+    this.pending.clear()
 
     this.extensionWs = ws
     if (this.pingInterval) {
@@ -413,6 +455,10 @@ export class NPCRelay extends EventEmitter {
   }
 
   async fetch(url: string, options: Record<string, any> = {}): Promise<any> {
+    if (this.proxyMode) {
+      return this.httpPost('/fetch', { url, options })
+    }
+
     if (!this.extensionWs || this.extensionWs.readyState !== WebSocket.OPEN) {
       throw new Error('Chrome extension not connected')
     }
