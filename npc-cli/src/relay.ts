@@ -323,6 +323,7 @@ export class NPCRelay extends EventEmitter {
     this.readyPromise = new Promise<string>((resolve, reject) => {
       const cleanup = () => {
         clearTimeout(timer)
+        if (retryInterval) clearInterval(retryInterval)
         this.removeListener('sessionReady', onSession)
         this.removeListener('extensionConnected', onExtension)
         this.readyPromise = null
@@ -343,13 +344,13 @@ export class NPCRelay extends EventEmitter {
         resolve(sid)
       }
 
-      const onExtension = async () => {
+      const requestAttach = () => {
         if (this.sessionId) {
           cleanup()
           resolve(this.sessionId)
           return
         }
-        if (!this.proxyMode) {
+        if (!this.proxyMode && this.extensionWs?.readyState === WebSocket.OPEN) {
           try {
             const id = this.nextId++
             this.extensionWs!.send(JSON.stringify({ id, method: 'attachActiveTab' }))
@@ -357,8 +358,24 @@ export class NPCRelay extends EventEmitter {
         }
       }
 
+      const onExtension = () => requestAttach()
+
       this.once('sessionReady', onSession)
       this.once('extensionConnected', onExtension)
+
+      // If extension is already connected but no session, actively request attach
+      // Retry every 2s in case the first attach fails (e.g. no active tab yet)
+      if (this.isConnected() && !this.sessionId) {
+        requestAttach()
+      }
+      const retryInterval = setInterval(() => {
+        if (this.sessionId) {
+          cleanup()
+          resolve(this.sessionId)
+          return
+        }
+        requestAttach()
+      }, 2000)
     })
 
     return this.readyPromise

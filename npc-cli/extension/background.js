@@ -2,6 +2,7 @@ const RELAY_URL = 'ws://localhost:7221/extension';
 let ws = null;
 let connectedTabs = new Map();
 let nextSessionId = 1;
+let lastAttachedTabId = null;
 
 let offscreenCreating = null;
 async function setupOffscreen() {
@@ -54,8 +55,21 @@ function connect() {
   ws.onopen = async () => {
     console.log('[npc] WebSocket connected to relay');
     updateIcon();
-    await new Promise(r => setTimeout(r, 500));
+
+    // Re-announce any already-attached tabs to the relay
+    for (const [tabId, info] of connectedTabs) {
+      ws.send(JSON.stringify({
+        method: 'forwardCDPEvent',
+        params: {
+          method: 'Target.attachedToTarget',
+          params: { sessionId: info.sessionId, targetInfo: { targetId: info.targetId, attached: true, type: 'page' }, waitingForDebugger: false }
+        }
+      }));
+    }
+
+    // If no tabs attached, auto-attach the active tab
     if (connectedTabs.size === 0) {
+      await new Promise(r => setTimeout(r, 300));
       await autoAttachActiveTab();
     }
   };
@@ -77,7 +91,7 @@ function connect() {
 
     if (msg.method === 'attachActiveTab') {
       await autoAttachActiveTab();
-      ws.send(JSON.stringify({ id: msg.id, result: { attached: connectedTabs.size } }));
+      ws.send(JSON.stringify({ id: msg.id, result: { attached: connectedTabs.size, sessionId: connectedTabs.size > 0 ? [...connectedTabs.values()][0].sessionId : null } }));
       return;
     }
 
@@ -273,6 +287,7 @@ async function attachTab(tabId) {
 
   const sessionId = `session-${nextSessionId++}`;
   connectedTabs.set(tabId, { sessionId, targetId: targetInfo.targetId });
+  lastAttachedTabId = tabId;
 
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
@@ -339,9 +354,17 @@ chrome.debugger.onEvent.addListener((src, method, params) => {
   }
 });
 
-chrome.debugger.onDetach.addListener((src) => {
+// When debugger detaches (user dismisses bar, tab navigates to chrome:// etc),
+// try to reattach the active tab so the session isn't permanently lost
+chrome.debugger.onDetach.addListener(async (src, reason) => {
   if (connectedTabs.has(src.tabId)) {
     detachTab(src.tabId);
+  }
+
+  // Auto-recover: if we lost our only session, try to reattach
+  if (connectedTabs.size === 0 && ws?.readyState === WebSocket.OPEN) {
+    await new Promise(r => setTimeout(r, 500));
+    await autoAttachActiveTab();
   }
 });
 
@@ -370,12 +393,30 @@ chrome.action.onClicked.addListener(async (tab) => {
 connect();
 
 chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
-chrome.alarms.onAlarm.addListener((alarm) => {
+chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'keepalive') {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       connect();
-    } else if (ws.readyState === WebSocket.OPEN) {
+    } else {
       ws.send(JSON.stringify({ method: 'ping' }));
+
+      // Verify connected tabs are still alive
+      for (const tabId of [...connectedTabs.keys()]) {
+        try {
+          const tab = await chrome.tabs.get(tabId);
+          if (!isAttachable(tab.url)) {
+            detachTab(tabId);
+          }
+        } catch {
+          // Tab no longer exists
+          detachTab(tabId);
+        }
+      }
+
+      // If we lost all sessions, try to reattach
+      if (connectedTabs.size === 0) {
+        await autoAttachActiveTab();
+      }
     }
   }
 });
@@ -385,6 +426,18 @@ async function autoAttachActiveTab() {
   if (autoAttaching) return;
   autoAttaching = true;
   try {
+    // First try the last tab we were attached to (if still alive)
+    if (lastAttachedTabId && !connectedTabs.has(lastAttachedTabId)) {
+      try {
+        const tab = await chrome.tabs.get(lastAttachedTabId);
+        if (tab && isAttachable(tab.url)) {
+          await attachTab(tab.id);
+          return;
+        }
+      } catch {}
+    }
+
+    // Fall back to the currently active tab
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
 
     for (const tab of tabs) {
@@ -399,6 +452,17 @@ async function autoAttachActiveTab() {
         }
       }
     }
+
+    // Last resort: try any window's active tab
+    const allTabs = await chrome.tabs.query({ active: true });
+    for (const tab of allTabs) {
+      if (tab && tab.id && isAttachable(tab.url) && !connectedTabs.has(tab.id)) {
+        try {
+          await attachTab(tab.id);
+          return;
+        } catch {}
+      }
+    }
   } catch (e) {
     console.log('[npc] Auto-attach failed:', e.message);
   } finally {
@@ -406,13 +470,19 @@ async function autoAttachActiveTab() {
   }
 }
 
+// When user switches tabs, attach the new active tab (swap, not accumulate)
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   if (ws?.readyState !== WebSocket.OPEN) return;
-  if (connectedTabs.size > 0) return;
+
   try {
     const tab = await chrome.tabs.get(activeInfo.tabId);
-    if (tab && isAttachable(tab.url) && !connectedTabs.has(tab.id)) {
-      await attachTab(tab.id);
-    }
+    if (!tab || !isAttachable(tab.url)) return;
+
+    // If this tab is already connected, nothing to do
+    if (connectedTabs.has(tab.id)) return;
+
+    // Detach old tabs, attach the new active one
+    detachAllTabs();
+    await attachTab(tab.id);
   } catch {}
 });
