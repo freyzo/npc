@@ -1,0 +1,14 @@
+src/
+.cursor/
+plans/
+docs/
+chrome-store/
+cws-assets/
+*.excalidraw
+.gitignore
+.DS_Store
+tsconfig.json
+.env*
+*.tgz
+npc-extension-*.zip
+extension-cws/

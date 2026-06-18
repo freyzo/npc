@@ -1,0 +1,54 @@
+{
+  "name": "npc-agent",
+  "version": "1.0.0",
+  "description": "Your browser's NPC. Handles the side quests.",
+  "type": "module",
+  "bin": {
+    "npc": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "relay": "node dist/index.js --relay-only",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist/",
+    "extension/",
+    "README.md",
+    "LICENSE"
+  ],
+  "author": "Freya Zou <suzyzou34@gmail.com> (https://freyazou.com)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/freyzo/npc.git"
+  },
+  "homepage": "https://github.com/freyzo/npc#readme",
+  "bugs": {
+    "url": "https://github.com/freyzo/npc/issues"
+  },
+  "keywords": [
+    "mcp",
+    "browser-automation",
+    "chrome-extension",
+    "cdp",
+    "devtools",
+    "cursor",
+    "vscode",
+    "npc"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "ws": "^8.17.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "NPC",
-  "version": "0.1.0",
-  "description": "Connect your browser to NPC — handles the side quests.",
+  "version": "1.0.0",
+  "description": "Connect your browser to NPC - handles the side quests.",
   "permissions": [
     "debugger",
     "tabs",
@@ -18,7 +18,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "NPC — connect this tab",
+    "default_title": "NPC - connect this tab",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

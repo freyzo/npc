@@ -2,8 +2,8 @@
   "mcpServers": {
     "npc": {
       "command": "node",
-      "args": ["/Users/freyzo/Desktop/npc/dist/index.js"],
-      "cwd": "/Users/freyzo/Desktop/npc"
+      "args": ["/Users/freyzo/Desktop/npc/npc-cli/dist/index.js"],
+      "cwd": "/Users/freyzo/Desktop/npc/npc-cli"
     }
   }
 }
