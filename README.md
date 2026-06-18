@@ -22,12 +22,12 @@ npm i -g npc-agent
 
 ## What it does
 
-Your IDE agent says what to do ("message Tim on Slack"). NPC does it in your real, logged-in browser. No API keys per service, no OAuth, no bot accounts. Works with any MCP IDE - Cursor, VS Code, Windsurf.
+Your IDE agent says what to do ("message Anna on Slack"). NPC does it in your real, logged-in browser. No API keys per service, no OAuth, no bot accounts. Works with any MCP IDE - Cursor, VS Code, Windsurf.
 
 | You want to | Your IDE says |
 | --- | --- |
 | Message someone on Slack | "go to slack and message #general: deploy is done" |
-| Reply on Messenger | "open messenger and reply to Tim: sounds good" |
+| Reply on Messenger | "open messenger and reply to Anna: sounds good" |
 | Check Gmail | "take a screenshot of my gmail inbox" |
 | Fill out a form | "find the email field, click it, type my address, press Tab" |
 | Do it all in one shot | use `npc_batch` with an array of actions |
@@ -100,7 +100,7 @@ One MCP call instead of four:
 
 ```json
 [
-  {"action": "find", "selector": "Message Tim"},
+  {"action": "find", "selector": "Message Anna"},
   {"action": "click", "x": 450, "y": 320},
   {"action": "type", "text": "hey, deploy is done"},
   {"action": "key", "key": "Enter"}
