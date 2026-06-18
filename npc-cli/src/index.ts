@@ -64,8 +64,15 @@ relay.on('extensionDisconnected', () => {
   process.stderr.write('[npc] browser extension disconnected\n')
 })
 
-process.on('SIGINT', () => { relay.close(); process.exit(0) })
-process.on('SIGTERM', () => { relay.close(); process.exit(0) })
+function shutdown() {
+  relay.close()
+  // Force exit after 500ms if cleanup hangs - don't hold the port
+  setTimeout(() => process.exit(0), 500).unref()
+  process.exit(0)
+}
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)
+process.on('exit', () => relay.close())
 
 if (relayOnly) {
   if (relay.isProxy) {

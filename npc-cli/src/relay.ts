@@ -4,6 +4,7 @@ import { createServer, request as httpRequest } from 'http'
 
 export class NPCRelay extends EventEmitter {
   private wss: WebSocketServer | null = null
+  private httpServer: ReturnType<typeof createServer> | null = null
   private extensionWs: WebSocket | null = null
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>()
   private nextId = 1
@@ -24,9 +25,36 @@ export class NPCRelay extends EventEmitter {
     const relay = new NPCRelay(port)
     const bound = await relay.tryBind()
     if (!bound) {
-      relay.startProxyMode()
+      // Port might be held by a dying process (Cursor restart race).
+      // Wait and retry once before falling back to proxy mode.
+      await new Promise(r => setTimeout(r, 1500))
+      const retryBound = await relay.tryBind()
+      if (!retryBound) {
+        // Port is genuinely held by another relay - proxy to it
+        const alive = await relay.probeRelay()
+        if (alive) {
+          relay.startProxyMode()
+        } else {
+          // Port held by something that isn't an NPC relay. Wait longer and try once more.
+          await new Promise(r => setTimeout(r, 2000))
+          const lastTry = await relay.tryBind()
+          if (!lastTry) {
+            throw new Error(`Port ${port} is in use by a non-NPC process. Kill it or set NPC_PORT.`)
+          }
+        }
+      }
     }
     return relay
+  }
+
+  /** Check if an existing relay is alive on our port. */
+  private async probeRelay(): Promise<boolean> {
+    try {
+      const status = await this.httpGet('/status')
+      return status && typeof status.connected === 'boolean'
+    } catch {
+      return false
+    }
   }
 
   /** Try to start the WebSocket server. Returns true if successful. */
@@ -92,25 +120,28 @@ export class NPCRelay extends EventEmitter {
         res.end()
       })
 
-      this.wss = new WebSocketServer({ server })
-
-      this.wss.on('connection', (ws, req) => {
-        const url = req.url ?? ''
-        if (url === '/extension' || url.startsWith('/extension')) {
-          this.handleExtension(ws)
-        }
-      })
-
       server.on('error', (err: NodeJS.ErrnoException) => {
         if (err.code === 'EADDRINUSE') {
-          this.wss = null
           resolve(false)
           return
         }
         throw err
       })
 
-      server.once('listening', () => resolve(true))
+      server.once('listening', () => {
+        this.httpServer = server
+        this.wss = new WebSocketServer({ server })
+
+        this.wss.on('connection', (ws, req) => {
+          const url = req.url ?? ''
+          if (url === '/extension' || url.startsWith('/extension')) {
+            this.handleExtension(ws)
+          }
+        })
+
+        resolve(true)
+      })
+
       server.listen(this.port)
     })
   }
@@ -402,6 +433,19 @@ export class NPCRelay extends EventEmitter {
   close() {
     if (this.pingInterval) clearInterval(this.pingInterval)
     if (this.proxyPollInterval) clearInterval(this.proxyPollInterval)
-    if (this.wss) this.wss.close()
+    if (this.extensionWs) {
+      try { this.extensionWs.close() } catch {}
+      this.extensionWs = null
+    }
+    if (this.wss) {
+      this.wss.close()
+      this.wss = null
+    }
+    if (this.httpServer) {
+      this.httpServer.close()
+      // Force-close all open sockets so the port is released immediately
+      this.httpServer.closeAllConnections?.()
+      this.httpServer = null
+    }
   }
 }
